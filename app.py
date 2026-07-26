@@ -1,7 +1,7 @@
 # ============================================================
 # CMA URGENCE ENTREPRISES
-# Version 1.2 - Streamlit
-# Navigation corrigée + guides courriers + statistiques entreprises + exports journaliers
+# Version 2.0 - Streamlit
+# Interface CRM de crise + dashboard premium + diagnostic guidé + imports/exports
 # ============================================================
 
 from __future__ import annotations
@@ -649,6 +649,207 @@ def inject_css() -> None:
             .app-header-title {{font-size:1.55rem;}}
             .kpi-card {{min-height:120px;}}
         }}
+
+        /* ===== V2 : corrections de contraste et finition premium ===== */
+        .app-header-title,
+        .app-header h1,
+        .app-header .app-header-title {{
+            color: #FFFFFF !important;
+            opacity: 1 !important;
+            text-shadow: 0 3px 14px rgba(0,0,0,.34);
+        }}
+
+        .app-header-subtitle {{
+            color: rgba(255,255,255,.86) !important;
+        }}
+
+        .app-header-kicker {{
+            color: #FFB6C1 !important;
+        }}
+
+        .dashboard-shell {{
+            padding: 1.05rem;
+            border: 1px solid rgba(227,231,237,.95);
+            border-radius: 22px;
+            background: rgba(255,255,255,.76);
+            box-shadow: 0 18px 38px rgba(16,24,40,.07);
+            backdrop-filter: blur(10px);
+        }}
+
+        .command-strip {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: .7rem;
+            margin: .25rem 0 1rem;
+        }}
+
+        .command-item {{
+            padding: .82rem .9rem;
+            border: 1px solid #E6EAF0;
+            border-radius: 14px;
+            background: linear-gradient(145deg,#FFFFFF,#F8FAFC);
+        }}
+
+        .command-value {{
+            color: #172033;
+            font-size: 1.35rem;
+            font-weight: 900;
+            line-height: 1;
+        }}
+
+        .command-label {{
+            margin-top: .3rem;
+            color: #667085;
+            font-size: .72rem;
+            font-weight: 700;
+        }}
+
+        .priority-mini {{
+            padding: .78rem .85rem;
+            margin-bottom: .55rem;
+            border: 1px solid #ECEFF4;
+            border-left: 4px solid var(--cma-red);
+            border-radius: 13px;
+            background: #FFFFFF;
+            box-shadow: 0 5px 16px rgba(16,24,40,.045);
+        }}
+
+        .priority-mini-title {{
+            color: #172033;
+            font-size: .86rem;
+            font-weight: 850;
+        }}
+
+        .priority-mini-meta {{
+            margin-top: .25rem;
+            color: #667085;
+            font-size: .72rem;
+            line-height: 1.45;
+        }}
+
+        .crm-strip {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0,1fr));
+            gap: .7rem;
+            margin: .8rem 0 1rem;
+        }}
+
+        .crm-chip {{
+            padding: .8rem .9rem;
+            border: 1px solid #E5E9F0;
+            border-radius: 14px;
+            background: #FFFFFF;
+        }}
+
+        .crm-chip-label {{
+            color: #667085;
+            font-size: .7rem;
+            font-weight: 750;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+        }}
+
+        .crm-chip-value {{
+            margin-top: .25rem;
+            color: #172033;
+            font-size: .94rem;
+            font-weight: 850;
+        }}
+
+        .step-card {{
+            padding: 1rem;
+            border: 1px solid #E5E9F0;
+            border-radius: 16px;
+            background: linear-gradient(145deg,#FFFFFF,#FAFBFC);
+            box-shadow: 0 6px 18px rgba(16,24,40,.04);
+        }}
+
+        .step-number {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            margin-right: .45rem;
+            border-radius: 50%;
+            background: #FFF0F2;
+            color: var(--cma-red);
+            font-weight: 900;
+        }}
+
+        .today-row {{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:.75rem;
+            padding:.72rem .8rem;
+            border-bottom:1px solid #EEF1F4;
+        }}
+
+        .today-row:last-child {{
+            border-bottom:none;
+        }}
+
+        .today-title {{
+            color:#172033;
+            font-size:.82rem;
+            font-weight:800;
+        }}
+
+        .today-meta {{
+            margin-top:.15rem;
+            color:#667085;
+            font-size:.7rem;
+        }}
+
+        .soft-panel {{
+            padding: 1rem;
+            border: 1px solid #E5E9F0;
+            border-radius: 17px;
+            background: #FFFFFF;
+            box-shadow: 0 7px 20px rgba(16,24,40,.045);
+        }}
+
+        .stTabs [data-baseweb="tab-list"] {{
+            gap: .45rem;
+            border-bottom: 0;
+        }}
+
+        .stTabs [data-baseweb="tab"] {{
+            height: 2.7rem;
+            padding: 0 1rem;
+            border: 1px solid #E3E7ED;
+            border-radius: 12px;
+            background: #FFFFFF;
+            color: #475467;
+            font-weight: 800;
+        }}
+
+        .stTabs [aria-selected="true"] {{
+            background: #FFF0F2 !important;
+            color: var(--cma-red) !important;
+            border-color: #F3BAC2 !important;
+        }}
+
+        [data-testid="stFileUploaderDropzone"] {{
+            min-height: 150px;
+            border: 2px dashed #D6DCE5 !important;
+            border-radius: 18px !important;
+            background: linear-gradient(145deg,#FFFFFF,#F8FAFC) !important;
+        }}
+
+        [data-testid="stFileUploaderDropzone"]:hover {{
+            border-color: var(--cma-red) !important;
+            background: #FFF8F9 !important;
+        }}
+
+        @media (max-width: 1000px) {{
+            .command-strip,
+            .crm-strip {{
+                grid-template-columns: repeat(2, minmax(0,1fr));
+            }}
+        }}
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -1115,6 +1316,33 @@ def render_kpi(label: str, value: int | str, icon: str, detail: str, background_
     )
 
 
+
+def render_command_strip(total: int, today_contacts: int, due_today: int, critical: int) -> None:
+    st.markdown(
+        f"""
+        <div class="command-strip">
+            <div class="command-item">
+                <div class="command-value">{total}</div>
+                <div class="command-label">Entreprises suivies</div>
+            </div>
+            <div class="command-item">
+                <div class="command-value">{today_contacts}</div>
+                <div class="command-label">Contacts aujourd’hui</div>
+            </div>
+            <div class="command-item">
+                <div class="command-value">{due_today}</div>
+                <div class="command-label">Relances dues</div>
+            </div>
+            <div class="command-item">
+                <div class="command-value">{critical}</div>
+                <div class="command-label">Situations critiques</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_status_legend() -> None:
     html = ""
     for status, color in STATUS_HEX.items():
@@ -1123,7 +1351,7 @@ def render_status_legend() -> None:
 
 
 def render_footer() -> None:
-    st.markdown('<div class="footer-note">CMA Urgence Entreprises · V1.2 · Données temporaires de session</div>', unsafe_allow_html=True)
+    st.markdown('<div class="footer-note">CMA Urgence Entreprises · V2.0 · Données temporaires de session</div>', unsafe_allow_html=True)
 
 
 def navigate_to(page: str, company_id: int | None = None) -> None:
@@ -1196,56 +1424,140 @@ def render_sidebar() -> str:
 # ============================================================
 
 def page_dashboard() -> None:
-    render_header(APP_NAME, "Vue consolidée de la situation, des entreprises suivies et des actions prioritaires.", "Centre de commandement")
-    df = companies_dataframe()
+    render_header(
+        APP_NAME,
+        "Vue consolidée de la situation, des entreprises suivies et des actions prioritaires.",
+        "Centre de commandement",
+    )
 
+    df = companies_dataframe()
     total = len(df)
     critiques = int((df["Statut"] == "Critique").sum())
-    relances = int(df["Relance"].apply(lambda v: v is not None and v <= date.today()).sum())
+    relances = int(df["Relance"].apply(lambda value: value is not None and value <= date.today()).sum())
     reprises = int(df["Statut"].isin(["Activité reprise", "Clôturé"]).sum())
+    contacts_today = int(
+        df["Dernier contact"].apply(
+            lambda value: isinstance(value, datetime) and value.date() == date.today()
+        ).sum()
+    )
+
+    render_command_strip(total, contacts_today, relances, critiques)
 
     cols = st.columns(4)
     with cols[0]:
         render_kpi("Entreprises suivies", total, "🏢", "Dossiers enregistrés", "#EEF4FF", "#2671DD")
     with cols[1]:
-        render_kpi("Relances à effectuer", relances, "☎️", "Échéance atteinte", "#FFF5E6", "#D97800")
+        render_kpi("Relances à effectuer", relances, "☎️", "Échéance atteinte ou dépassée", "#FFF5E6", "#D97800")
     with cols[2]:
         render_kpi("Situations critiques", critiques, "🚨", "Intervention prioritaire", "#FFF0F3", CMA_RED)
     with cols[3]:
         render_kpi("Reprises ou clôtures", reprises, "✅", "Évolution favorable", "#ECFDF3", "#168A47")
 
     st.write("")
-    map_col, alert_col = st.columns([2.25, 1], gap="large")
+    map_col, side_col = st.columns([2.55, 1], gap="large")
 
     with map_col:
-        render_section_title("Cartographie opérationnelle", "Position et niveau de priorité des entreprises accompagnées.")
+        st.markdown('<div class="soft-panel">', unsafe_allow_html=True)
+        render_section_title("Cartographie opérationnelle", "La carte partagée constitue le centre de pilotage territorial.")
         render_status_legend()
-        render_map(df, height=480)
+        render_map(df, height=560)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    with alert_col:
-        render_section_title("Situations prioritaires", "Dossiers nécessitant une attention rapide.")
-        priority = df[df["Statut"].isin(["Critique", "À rappeler"])].head(5)
+    with side_col:
+        render_section_title("À traiter maintenant", "Priorités et relances les plus proches.")
+
+        priority = df[df["Statut"].isin(["Critique", "À rappeler"])].copy()
+        priority["Relance_tri"] = priority["Relance"].apply(lambda value: value or date.max)
+        priority = priority.sort_values(["Relance_tri", "Urgence"]).head(5)
+
+        if priority.empty:
+            st.success("Aucune priorité immédiate.")
+
         for _, row in priority.iterrows():
             st.markdown(
-                f'<div class="alert-card"><div class="alert-card-title">{row["Entreprise"]}</div><div class="alert-card-meta">📍 {row["Commune"]}<br>🚨 {row["Urgence"]} · {row["Statut"]}<br>👤 {row["Conseiller"]}</div></div>',
+                f"""
+                <div class="priority-mini">
+                    <div class="priority-mini-title">{row["Entreprise"]}</div>
+                    <div class="priority-mini-meta">
+                        📍 {row["Commune"]}<br>
+                        {row["Statut"]} · urgence {row["Urgence"]}<br>
+                        Relance : {format_date(row["Relance"])}
+                    </div>
+                </div>
+                """,
                 unsafe_allow_html=True,
             )
-            if st.button("Ouvrir le dossier", key=f"open_{row['ID']}", use_container_width=True):
+            if st.button("Ouvrir", key=f"dash_open_{row['ID']}", use_container_width=True):
                 navigate_to("Entreprises", int(row["ID"]))
+
+        st.write("")
+        render_section_title("Activité du jour", "Derniers dossiers mis à jour.")
+
+        recent = df.sort_values("Dernier contact", ascending=False).head(5)
+        st.markdown('<div class="soft-panel">', unsafe_allow_html=True)
+        for _, row in recent.iterrows():
+            st.markdown(
+                f"""
+                <div class="today-row">
+                    <div>
+                        <div class="today-title">{row["Entreprise"]}</div>
+                        <div class="today-meta">{row["Commune"]} · {row["Statut"]}</div>
+                    </div>
+                    <div class="today-meta">{row["Dernier contact"].strftime("%d/%m %H:%M")}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.write("")
     c1, c2 = st.columns(2, gap="large")
+
     with c1:
-        commune_df = df.groupby("Commune").size().reset_index(name="Entreprises").sort_values("Entreprises")
-        fig = px.bar(commune_df, x="Entreprises", y="Commune", orientation="h", text="Entreprises")
+        commune_df = (
+            df.groupby("Commune")
+            .size()
+            .reset_index(name="Entreprises")
+            .sort_values("Entreprises")
+        )
+        fig = px.bar(
+            commune_df,
+            x="Entreprises",
+            y="Commune",
+            orientation="h",
+            text="Entreprises",
+        )
         fig.update_traces(marker_color=CMA_RED, textposition="outside")
-        fig.update_layout(height=340, margin=dict(l=5, r=25, t=25, b=5), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_title="", yaxis_title="", title="Entreprises par commune")
+        fig.update_layout(
+            height=350,
+            margin=dict(l=5, r=25, t=50, b=5),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis_title="",
+            yaxis_title="",
+            title="Entreprises par commune",
+        )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
     with c2:
         status_df = df.groupby("Statut").size().reset_index(name="Entreprises")
-        fig = px.pie(status_df, names="Statut", values="Entreprises", hole=.65, color="Statut", color_discrete_map=STATUS_HEX)
-        fig.update_layout(height=340, margin=dict(l=5, r=5, t=25, b=5), paper_bgcolor="rgba(0,0,0,0)", title="Répartition par statut")
+        fig = px.pie(
+            status_df,
+            names="Statut",
+            values="Entreprises",
+            hole=.68,
+            color="Statut",
+            color_discrete_map=STATUS_HEX,
+        )
+        fig.update_layout(
+            height=350,
+            margin=dict(l=5, r=5, t=50, b=5),
+            paper_bgcolor="rgba(0,0,0,0)",
+            title="Répartition par statut",
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+        )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
     render_footer()
 
 
@@ -1254,56 +1566,138 @@ def page_dashboard() -> None:
 # ============================================================
 
 def page_diagnostic() -> None:
-    render_header("Nouveau diagnostic", "Qualifier la situation de l’entreprise et préparer le plan d’action.", "Accompagnement")
-    st.info("Le diagnostic calcule automatiquement un niveau d’urgence. Le résultat pourra être ajusté dans la fiche entreprise.")
+    render_header(
+        "Nouveau diagnostic",
+        "Un parcours guidé en trois étapes pour qualifier la situation et préparer l’accompagnement.",
+        "Assistant de diagnostic",
+    )
 
-    with st.form("diagnostic_form"):
-        render_section_title("1. Identification de l’entreprise", "Renseignez les informations principales.")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            raison_sociale = st.text_input("Raison sociale *")
-            siren = st.text_input("SIREN", max_chars=9)
-            dirigeant = st.text_input("Dirigeant")
-        with c2:
-            activite = st.text_input("Activité *")
-            commune = st.selectbox("Commune *", list(COMMUNES_COORDONNEES.keys()))
-            adresse = st.text_input("Adresse")
-        with c3:
-            telephone = st.text_input("Téléphone")
-            email = st.text_input("E-mail")
-            effectif = st.number_input("Effectif", min_value=0, max_value=999, value=1)
+    st.info(
+        "Le score proposé est une aide au tri. Le conseiller reste responsable de l’appréciation finale."
+    )
 
-        st.divider()
-        render_section_title("2. Évaluation des impacts", "Les réponses permettent d’estimer le niveau de priorité.")
-        c1, c2 = st.columns(2)
-        with c1:
-            interruption = st.radio("Interruption d’activité", ["Aucune", "Partielle", "Totale"], horizontal=True)
-            degats = st.select_slider("Dégâts matériels", options=["Aucun", "Légers", "Importants", "Destruction majeure"], value="Légers")
-            accessibilite = st.radio("Accessibilité de l’établissement", ["Accessible", "Accès limité", "Zone inaccessible"])
-        with c2:
-            tresorerie = st.selectbox("Situation de trésorerie", ["Pas de difficulté immédiate", "Tension dans le mois", "Risque sous 15 jours", "Situation immédiate critique"])
-            salaries = st.selectbox("Situation des salariés", ["Non concerné", "Organisation maintenue", "Activité partielle envisagée", "Emplois directement menacés"])
-            date_relance = st.date_input("Date de relance souhaitée", value=date.today() + timedelta(days=2))
+    with st.form("diagnostic_form_v2"):
+        tab1, tab2, tab3 = st.tabs(
+            ["1 · Entreprise", "2 · Impacts", "3 · Besoins et synthèse"]
+        )
 
-        st.divider()
-        render_section_title("3. Besoins et compte rendu", "Décrivez la situation avec les mots de l’entreprise.")
-        besoins = st.multiselect("Besoins identifiés", ["Assurance", "Trésorerie", "Banque", "URSSAF", "DGFIP", "Activité partielle", "Salariés", "Fournisseurs", "Clients", "Relogement de l’activité", "Reprise d’activité", "Communication", "Autre"])
-        description = st.text_area("Description de la situation *", height=140)
-        conseiller = st.text_input("Conseiller en charge", value=st.session_state.current_advisor)
-        submitted = st.form_submit_button("Enregistrer le diagnostic", type="primary", use_container_width=True)
+        with tab1:
+            st.markdown(
+                '<div class="step-card"><span class="step-number">1</span><strong>Identification de l’entreprise</strong></div>',
+                unsafe_allow_html=True,
+            )
+            st.write("")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                raison_sociale = st.text_input("Raison sociale *")
+                siren = st.text_input("SIREN", max_chars=9)
+                dirigeant = st.text_input("Dirigeant")
+            with c2:
+                activite = st.text_input("Activité *")
+                commune = st.selectbox("Commune *", list(COMMUNES_COORDONNEES.keys()))
+                adresse = st.text_input("Adresse")
+            with c3:
+                telephone = st.text_input("Téléphone")
+                email = st.text_input("E-mail")
+                effectif = st.number_input("Effectif", min_value=0, max_value=999, value=1)
+
+        with tab2:
+            st.markdown(
+                '<div class="step-card"><span class="step-number">2</span><strong>Évaluation des impacts</strong></div>',
+                unsafe_allow_html=True,
+            )
+            st.write("")
+            c1, c2 = st.columns(2, gap="large")
+            with c1:
+                interruption = st.radio(
+                    "Interruption d’activité",
+                    ["Aucune", "Partielle", "Totale"],
+                    horizontal=True,
+                )
+                degats = st.select_slider(
+                    "Dégâts matériels",
+                    options=["Aucun", "Légers", "Importants", "Destruction majeure"],
+                    value="Légers",
+                )
+                accessibilite = st.radio(
+                    "Accessibilité de l’établissement",
+                    ["Accessible", "Accès limité", "Zone inaccessible"],
+                )
+            with c2:
+                tresorerie = st.selectbox(
+                    "Situation de trésorerie",
+                    [
+                        "Pas de difficulté immédiate",
+                        "Tension dans le mois",
+                        "Risque sous 15 jours",
+                        "Situation immédiate critique",
+                    ],
+                )
+                salaries = st.selectbox(
+                    "Situation des salariés",
+                    [
+                        "Non concerné",
+                        "Organisation maintenue",
+                        "Activité partielle envisagée",
+                        "Emplois directement menacés",
+                    ],
+                )
+                date_relance = st.date_input(
+                    "Date de relance souhaitée",
+                    value=date.today() + timedelta(days=2),
+                )
+
+        with tab3:
+            st.markdown(
+                '<div class="step-card"><span class="step-number">3</span><strong>Besoins et compte rendu</strong></div>',
+                unsafe_allow_html=True,
+            )
+            st.write("")
+            besoins = st.multiselect(
+                "Besoins identifiés",
+                [
+                    "Assurance", "Trésorerie", "Banque", "URSSAF", "DGFIP",
+                    "Activité partielle", "Salariés", "Fournisseurs", "Clients",
+                    "Relogement de l’activité", "Reprise d’activité",
+                    "Communication", "Autre",
+                ],
+            )
+            description = st.text_area(
+                "Description de la situation *",
+                height=170,
+                placeholder="Dégâts, interruption, démarches engagées, difficultés et besoins exprimés.",
+            )
+            conseiller = st.text_input(
+                "Conseiller en charge",
+                value=st.session_state.current_advisor,
+            )
+
+        submitted = st.form_submit_button(
+            "Enregistrer le diagnostic",
+            type="primary",
+            use_container_width=True,
+        )
 
     if submitted:
         if not raison_sociale.strip() or not activite.strip() or not description.strip():
             st.error("La raison sociale, l’activité et la description sont obligatoires.")
             return
+
         if siren and (not siren.isdigit() or len(siren) != 9):
             st.error("Le SIREN doit contenir exactement 9 chiffres.")
             return
+
         if siren and any(normalize_siren(c["siren"]) == siren for c in st.session_state.companies):
             st.error("Ce SIREN existe déjà.")
             return
 
-        score, urgency = calculate_urgency_score(interruption, degats, tresorerie, salaries, accessibilite)
+        score, urgency = calculate_urgency_score(
+            interruption,
+            degats,
+            tresorerie,
+            salaries,
+            accessibilite,
+        )
         lat, lon = coordinates_for_commune(commune)
         new_id = max(c["id"] for c in st.session_state.companies) + 1
 
@@ -1327,11 +1721,18 @@ def page_diagnostic() -> None:
             "date_relance": date_relance,
             "latitude": lat,
             "longitude": lon,
-            "historique": [{"date": datetime.now(), "titre": "Diagnostic initial", "description": f"Score d’urgence : {score}/23."}],
+            "historique": [
+                {
+                    "date": datetime.now(),
+                    "titre": "Diagnostic initial",
+                    "description": f"Score d’urgence : {score}/23.",
+                }
+            ],
         }
         st.session_state.companies.append(company)
         st.session_state.selected_company_id = new_id
         st.success(f"Diagnostic enregistré : urgence {urgency}, score {score}/23.")
+
         if st.button("Ouvrir le dossier", type="primary"):
             navigate_to("Entreprises", new_id)
 
@@ -1345,7 +1746,18 @@ def page_companies() -> None:
 
     with st.expander("📥 Importer une liste Excel d’entreprises à rappeler", expanded=False):
         st.markdown('<div class="import-box">', unsafe_allow_html=True)
-        st.write("Le fichier doit contenir les colonnes suivantes :")
+        st.markdown(
+            """
+            <div style="text-align:center;padding:.5rem 0 1rem">
+                <div style="font-size:2rem">📥</div>
+                <div style="font-size:1rem;font-weight:850;color:#172033">Import collectif des entreprises à rappeler</div>
+                <div style="margin-top:.3rem;color:#667085;font-size:.8rem">
+                    Téléchargez le modèle, complétez-le puis déposez votre fichier Excel.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.code("SIREN | Raison sociale | Commune | Téléphone | Email | Activité | Conseiller | Date de rappel")
 
         st.download_button(
@@ -1455,7 +1867,30 @@ def render_company_record(company: dict[str, Any]) -> None:
         unsafe_allow_html=True,
     )
 
-    st.write("")
+    st.markdown(
+        f"""
+        <div class="crm-strip">
+            <div class="crm-chip">
+                <div class="crm-chip-label">Urgence</div>
+                <div class="crm-chip-value">{company["urgence"]}</div>
+            </div>
+            <div class="crm-chip">
+                <div class="crm-chip-label">Conseiller</div>
+                <div class="crm-chip-value">{company["conseiller"]}</div>
+            </div>
+            <div class="crm-chip">
+                <div class="crm-chip-label">Dernier contact</div>
+                <div class="crm-chip-value">{format_datetime(company["date_contact"])}</div>
+            </div>
+            <div class="crm-chip">
+                <div class="crm-chip-label">Prochaine relance</div>
+                <div class="crm-chip-value">{format_date(company["date_relance"])}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     left, right = st.columns([1.45, 1], gap="large")
     with left:
         st.markdown(f"""
