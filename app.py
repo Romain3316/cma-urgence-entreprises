@@ -1,7 +1,7 @@
 # ============================================================
 # CMA URGENCE ENTREPRISES
-# Version 1.1 - Streamlit
-# Corrections d'affichage + import Excel des entreprises à rappeler
+# Version 1.2 - Streamlit
+# Navigation corrigée + guides courriers + statistiques entreprises + exports journaliers
 # ============================================================
 
 from __future__ import annotations
@@ -78,6 +78,195 @@ IMPORT_COLUMNS = [
     "Conseiller",
     "Date de rappel",
 ]
+
+
+ORGANISM_GUIDES = {
+    "Assurance": {
+        "recipient": "Service sinistres de la compagnie d’assurance",
+        "subject": "Déclaration de sinistre et demande d’ouverture du dossier",
+        "request": (
+            "Nous sollicitons l’ouverture du dossier de sinistre, la confirmation "
+            "des garanties mobilisables et l’organisation rapide d’une expertise."
+        ),
+        "tasks": [
+            "Sécuriser les locaux et éviter l’aggravation des dommages.",
+            "Déclarer le sinistre dans le délai prévu au contrat.",
+            "Demander un numéro de dossier et les coordonnées du gestionnaire.",
+            "Ne pas jeter les biens endommagés avant accord ou expertise.",
+            "Chiffrer les pertes matérielles et l’interruption d’activité.",
+            "Conserver la preuve de tous les échanges et dépenses d’urgence.",
+        ],
+        "documents": [
+            "Contrat et attestation d’assurance.",
+            "Photos et vidéos datées des dommages.",
+            "Inventaire des biens endommagés avec factures disponibles.",
+            "Dépôt de plainte ou constat des autorités, si applicable.",
+            "Devis de remise en état et factures des mesures conservatoires.",
+            "Éléments comptables utiles à la perte d’exploitation.",
+            "RIB de l’entreprise.",
+        ],
+    },
+    "Banque": {
+        "recipient": "Direction de l’agence bancaire",
+        "subject": "Demande de soutien temporaire liée à une situation de crise",
+        "request": (
+            "Nous sollicitons un rendez-vous rapide afin d’étudier les solutions "
+            "temporaires de trésorerie, de report d’échéances ou d’aménagement des concours bancaires."
+        ),
+        "tasks": [
+            "Actualiser le besoin de trésorerie à 30, 60 et 90 jours.",
+            "Lister les échéances bancaires et charges prioritaires.",
+            "Prendre contact avec le conseiller professionnel.",
+            "Demander par écrit les solutions et leurs coûts.",
+            "Vérifier les garanties et assurances liées aux prêts.",
+        ],
+        "documents": [
+            "Derniers comptes annuels ou liasse fiscale.",
+            "Situation comptable récente.",
+            "Plan de trésorerie prévisionnel.",
+            "Relevés bancaires récents.",
+            "Tableau des emprunts et échéances.",
+            "Justificatifs de sinistre ou de fermeture.",
+            "RIB et pièce d’identité du dirigeant si demandés.",
+        ],
+    },
+    "URSSAF": {
+        "recipient": "Service des entreprises en difficulté de l’URSSAF",
+        "subject": "Demande de délai de paiement des cotisations sociales",
+        "request": (
+            "Nous sollicitons l’étude d’un délai ou d’un échéancier adapté, "
+            "compte tenu des conséquences immédiates de la crise sur l’activité et la trésorerie."
+        ),
+        "tasks": [
+            "Vérifier les échéances sociales dues et à venir.",
+            "Déposer les déclarations même en cas de difficulté de paiement.",
+            "Formuler la demande depuis l’espace en ligne de l’entreprise.",
+            "Proposer un échéancier réaliste et documenté.",
+            "Conserver l’accusé de réception et suivre la réponse.",
+        ],
+        "documents": [
+            "SIREN et coordonnées de l’entreprise.",
+            "Montant et nature des échéances concernées.",
+            "Situation de trésorerie et plan prévisionnel.",
+            "Justificatifs de la baisse ou de l’arrêt d’activité.",
+            "Relevés bancaires récents si demandés.",
+            "Proposition d’échéancier.",
+        ],
+    },
+    "DGFIP": {
+        "recipient": "Service des impôts des entreprises",
+        "subject": "Demande de délai ou de mesure adaptée pour les échéances fiscales",
+        "request": (
+            "Nous sollicitons l’examen d’un délai de paiement ou de toute mesure "
+            "adaptée à la situation exceptionnelle rencontrée par l’entreprise."
+        ),
+        "tasks": [
+            "Identifier précisément les impôts et échéances concernés.",
+            "Maintenir les déclarations fiscales dans les délais.",
+            "Contacter le service des impôts des entreprises.",
+            "Présenter une demande motivée, chiffrée et temporaire.",
+            "Suivre la messagerie sécurisée de l’espace professionnel.",
+        ],
+        "documents": [
+            "Avis ou références des échéances fiscales concernées.",
+            "Situation de trésorerie.",
+            "Derniers comptes ou situation comptable.",
+            "Justificatifs du sinistre et de ses conséquences.",
+            "Plan de règlement proposé.",
+            "Coordonnées de l’expert-comptable, le cas échéant.",
+        ],
+    },
+    "Activité partielle / DDETS": {
+        "recipient": "Service compétent en matière d’activité partielle",
+        "subject": "Demande d’accompagnement pour la mise en place de l’activité partielle",
+        "request": (
+            "Nous sollicitons l’examen de la situation de l’entreprise et un accompagnement "
+            "pour mobiliser le dispositif d’activité partielle lorsque les conditions sont réunies."
+        ),
+        "tasks": [
+            "Évaluer les salariés et heures potentiellement concernés.",
+            "Consulter le CSE lorsqu’il existe et selon les règles applicables.",
+            "Informer les salariés de la démarche.",
+            "Créer ou vérifier l’accès au portail dédié.",
+            "Déposer la demande avec un motif précis et des justificatifs.",
+            "Suivre la décision et effectuer les demandes d’indemnisation.",
+        ],
+        "documents": [
+            "SIRET de l’établissement.",
+            "Liste des salariés et durée du travail.",
+            "Période et volume d’heures envisagés.",
+            "Description circonstanciée de l’événement.",
+            "Justificatifs de fermeture, d’inaccessibilité ou de baisse d’activité.",
+            "Avis du CSE lorsqu’il est requis.",
+            "RIB de l’établissement.",
+        ],
+    },
+    "Bailleur": {
+        "recipient": "Propriétaire ou gestionnaire des locaux",
+        "subject": "Signalement des dommages et demande de concertation sur le bail",
+        "request": (
+            "Nous sollicitons un échange rapide afin d’organiser les mesures de sécurité, "
+            "les réparations et, si nécessaire, l’examen temporaire des conditions d’exécution du bail."
+        ),
+        "tasks": [
+            "Informer immédiatement le bailleur par écrit.",
+            "Vérifier les obligations respectives dans le bail.",
+            "Faire constater les dommages.",
+            "Coordonner les déclarations d’assurance.",
+            "Formaliser par écrit tout accord sur les loyers ou travaux.",
+        ],
+        "documents": [
+            "Bail commercial et état des lieux.",
+            "Photos et constats des dommages.",
+            "Déclaration de sinistre.",
+            "Rapport d’expertise lorsqu’il est disponible.",
+            "Devis de sécurisation ou de réparation.",
+            "Échanges avec les autorités sur l’accessibilité des locaux.",
+        ],
+    },
+    "Fournisseur": {
+        "recipient": "Service commercial ou comptable du fournisseur",
+        "subject": "Demande d’aménagement temporaire des conditions de règlement",
+        "request": (
+            "Nous sollicitons l’étude d’un report, d’un échéancier ou d’une adaptation "
+            "temporaire des livraisons, afin de préserver la continuité de la relation commerciale."
+        ),
+        "tasks": [
+            "Lister les factures, commandes et livraisons concernées.",
+            "Prioriser les fournisseurs indispensables à la reprise.",
+            "Proposer un calendrier de paiement réaliste.",
+            "Formaliser tout accord par écrit.",
+            "Mettre à jour le plan de trésorerie.",
+        ],
+        "documents": [
+            "Factures et relevé de compte fournisseur.",
+            "Commandes ou contrats concernés.",
+            "Justificatif de la situation exceptionnelle.",
+            "Proposition d’échéancier.",
+            "Prévision de reprise d’activité.",
+        ],
+    },
+    "Autre organisme": {
+        "recipient": "Service compétent",
+        "subject": "Demande d’examen de la situation de l’entreprise",
+        "request": (
+            "Nous sollicitons l’étude de la situation et des solutions susceptibles "
+            "d’être mobilisées au regard des difficultés rencontrées."
+        ),
+        "tasks": [
+            "Identifier le bon interlocuteur et le canal officiel.",
+            "Vérifier les délais et conditions de la démarche.",
+            "Présenter une demande précise, chiffrée et datée.",
+            "Conserver une copie du dossier et l’accusé de réception.",
+        ],
+        "documents": [
+            "Courrier explicatif.",
+            "Justificatifs de l’événement et de ses conséquences.",
+            "Coordonnées et identifiants de l’entreprise.",
+            "Éléments financiers ou administratifs utiles.",
+        ],
+    },
+}
 
 
 # ============================================================
@@ -580,6 +769,8 @@ def initialize_state() -> None:
         st.session_state.selected_company_id = 1
     if "current_page" not in st.session_state:
         st.session_state.current_page = "Tableau de bord"
+    if "nav_radio" not in st.session_state:
+        st.session_state.nav_radio = st.session_state.current_page
     if "cellule_name" not in st.session_state:
         st.session_state.cellule_name = "Cellule de crise Gironde"
     if "current_advisor" not in st.session_state:
@@ -761,6 +952,62 @@ def import_companies_from_dataframe(df: pd.DataFrame) -> tuple[int, int, list[st
     return imported, skipped, messages
 
 
+
+def daily_contacts_dataframe(selected_date: date) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+
+    for company in st.session_state.companies:
+        last_contact = company.get("date_contact")
+        if not isinstance(last_contact, datetime) or last_contact.date() != selected_date:
+            continue
+
+        rows.append(
+            {
+                "Date du contact": last_contact.strftime("%d/%m/%Y"),
+                "Heure": last_contact.strftime("%H:%M"),
+                "SIREN": company.get("siren", ""),
+                "Raison sociale": company.get("raison_sociale", ""),
+                "Activité": company.get("activite", ""),
+                "Commune": company.get("commune", ""),
+                "Téléphone": company.get("telephone", ""),
+                "Email": company.get("email", ""),
+                "Statut": company.get("statut", ""),
+                "Urgence": company.get("urgence", ""),
+                "Conseiller": company.get("conseiller", ""),
+                "Besoins identifiés": company.get("besoins", ""),
+                "Prochaine relance": format_date(company.get("date_relance")),
+                "Synthèse": company.get("description", ""),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def create_daily_contacts_excel(selected_date: date) -> tuple[bytes, pd.DataFrame]:
+    export_df = daily_contacts_dataframe(selected_date)
+    buffer = BytesIO()
+
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        export_df.to_excel(writer, index=False, sheet_name="Entreprises contactées")
+
+        worksheet = writer.sheets["Entreprises contactées"]
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+
+        widths = {
+            "A": 16, "B": 10, "C": 14, "D": 30, "E": 28, "F": 24,
+            "G": 18, "H": 30, "I": 26, "J": 14, "K": 20, "L": 40,
+            "M": 18, "N": 55,
+        }
+        for column, width in widths.items():
+            worksheet.column_dimensions[column].width = width
+
+    return buffer.getvalue(), export_df
+
+
+def sync_page_from_navigation() -> None:
+    st.session_state.current_page = st.session_state.nav_radio
+
 def calculate_urgency_score(interruption: str, degats: str, tresorerie: str, salaries: str, accessibilite: str) -> tuple[int, str]:
     score = 0
     score += {"Aucune": 0, "Partielle": 2, "Totale": 4}.get(interruption, 0)
@@ -876,11 +1123,12 @@ def render_status_legend() -> None:
 
 
 def render_footer() -> None:
-    st.markdown('<div class="footer-note">CMA Urgence Entreprises · V1.1 · Données temporaires de session</div>', unsafe_allow_html=True)
+    st.markdown('<div class="footer-note">CMA Urgence Entreprises · V1.2 · Données temporaires de session</div>', unsafe_allow_html=True)
 
 
 def navigate_to(page: str, company_id: int | None = None) -> None:
     st.session_state.current_page = page
+    st.session_state.nav_radio = page
     if company_id is not None:
         st.session_state.selected_company_id = company_id
     st.rerun()
@@ -913,9 +1161,18 @@ def render_sidebar() -> str:
             "Courriers": "📄",
             "Paramètres": "⚙️",
         }
-        current = st.session_state.current_page if st.session_state.current_page in pages else "Tableau de bord"
-        page = st.radio("Navigation", pages, index=pages.index(current), format_func=lambda item: f"{icons[item]}  {item}", label_visibility="collapsed")
-        st.session_state.current_page = page
+        if st.session_state.nav_radio not in pages:
+            st.session_state.nav_radio = "Tableau de bord"
+
+        st.radio(
+            "Navigation",
+            pages,
+            key="nav_radio",
+            format_func=lambda item: f"{icons[item]}  {item}",
+            label_visibility="collapsed",
+            on_change=sync_page_from_navigation,
+        )
+        page = st.session_state.nav_radio
 
         st.divider()
         st.caption("CELLULE ACTIVE")
@@ -1286,22 +1543,161 @@ def page_map() -> None:
 # ============================================================
 
 def page_statistics() -> None:
-    render_header("Statistiques", "Analyser l’activité de la cellule et les entreprises accompagnées.", "Analyse")
+    render_header(
+        "Statistiques entreprises",
+        "Analyser la situation des entreprises accompagnées et exporter l’activité quotidienne.",
+        "Analyse",
+    )
+
     df = companies_dataframe()
-    c1, c2 = st.columns(2)
+    details = pd.DataFrame(st.session_state.companies)
+
+    c1, c2 = st.columns(2, gap="large")
 
     with c1:
-        urgency_df = df.groupby("Urgence").size().reindex(URGENCY_LEVELS, fill_value=0).reset_index(name="Entreprises")
-        fig = px.bar(urgency_df, x="Urgence", y="Entreprises", text="Entreprises", color="Urgence", color_discrete_map={"Faible": "#16A34A", "Modérée": "#F2B705", "Élevée": "#F19100", "Critique": CMA_RED})
-        fig.update_layout(height=370, showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", title="Entreprises par urgence")
+        urgency_df = (
+            df.groupby("Urgence")
+            .size()
+            .reindex(URGENCY_LEVELS, fill_value=0)
+            .reset_index(name="Entreprises")
+        )
+        fig = px.bar(
+            urgency_df,
+            x="Urgence",
+            y="Entreprises",
+            text="Entreprises",
+            color="Urgence",
+            color_discrete_map={
+                "Faible": "#16A34A",
+                "Modérée": "#F2B705",
+                "Élevée": "#F19100",
+                "Critique": CMA_RED,
+            },
+        )
+        fig.update_layout(
+            height=370,
+            showlegend=False,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            title="Répartition par niveau d’urgence",
+            xaxis_title="",
+            yaxis_title="",
+        )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with c2:
-        advisor_df = df.groupby("Conseiller").size().reset_index(name="Dossiers")
-        fig = px.bar(advisor_df, x="Conseiller", y="Dossiers", text="Dossiers")
-        fig.update_traces(marker_color="#2671DD")
-        fig.update_layout(height=370, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", title="Charge par conseiller")
+        status_df = df.groupby("Statut").size().reset_index(name="Entreprises")
+        fig = px.pie(
+            status_df,
+            names="Statut",
+            values="Entreprises",
+            hole=0.62,
+            color="Statut",
+            color_discrete_map=STATUS_HEX,
+        )
+        fig.update_layout(
+            height=370,
+            paper_bgcolor="rgba(0,0,0,0)",
+            title="Répartition par statut",
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2),
+        )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    c3, c4 = st.columns(2, gap="large")
+
+    with c3:
+        commune_df = (
+            df.groupby("Commune")
+            .size()
+            .reset_index(name="Entreprises")
+            .sort_values("Entreprises", ascending=True)
+        )
+        fig = px.bar(
+            commune_df,
+            x="Entreprises",
+            y="Commune",
+            orientation="h",
+            text="Entreprises",
+        )
+        fig.update_traces(marker_color=CMA_RED, textposition="outside")
+        fig.update_layout(
+            height=390,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            title="Entreprises par commune",
+            xaxis_title="",
+            yaxis_title="",
+            margin=dict(l=5, r=30, t=50, b=5),
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    with c4:
+        activity_df = (
+            details.groupby("activite")
+            .size()
+            .reset_index(name="Entreprises")
+            .sort_values("Entreprises", ascending=True)
+            .tail(10)
+        )
+        fig = px.bar(
+            activity_df,
+            x="Entreprises",
+            y="activite",
+            orientation="h",
+            text="Entreprises",
+        )
+        fig.update_traces(marker_color="#2671DD", textposition="outside")
+        fig.update_layout(
+            height=390,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            title="Principales activités représentées",
+            xaxis_title="",
+            yaxis_title="",
+            margin=dict(l=5, r=30, t=50, b=5),
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    st.divider()
+    render_section_title(
+        "Export journalier des entreprises contactées",
+        "Choisissez une date pour télécharger la liste des entreprises dont le dernier contact a été enregistré ce jour-là.",
+    )
+
+    export_date = st.date_input(
+        "Journée à exporter",
+        value=date.today(),
+        key="daily_export_date",
+    )
+    excel_data, export_df = create_daily_contacts_excel(export_date)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Entreprises contactées", len(export_df))
+    m2.metric(
+        "Situations critiques",
+        int((export_df["Statut"] == "Critique").sum()) if not export_df.empty else 0,
+    )
+    m3.metric(
+        "Relances renseignées",
+        int(export_df["Prochaine relance"].ne("Aucune").sum()) if not export_df.empty else 0,
+    )
+
+    if export_df.empty:
+        st.info("Aucun dernier contact n’est enregistré pour cette journée.")
+    else:
+        st.dataframe(export_df, use_container_width=True, hide_index=True, height=300)
+        st.download_button(
+            "Télécharger l’export Excel de la journée",
+            data=excel_data,
+            file_name=f"entreprises_contactees_{export_date.strftime('%Y-%m-%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True,
+        )
+
+    st.caption(
+        "Dans cette version sans base de données, l’export repose sur la date du dernier contact enregistrée dans chaque fiche."
+    )
 
 
 # ============================================================
@@ -1336,7 +1732,7 @@ Demande :
 
 {request}
 
-L’entreprise reste disponible pour transmettre tout document justificatif nécessaire.
+L’entreprise reste disponible pour transmettre tout document justificatif nécessaire à l’étude de sa situation.
 
 Veuillez agréer, Madame, Monsieur, l’expression de nos salutations distinguées.
 
@@ -1350,21 +1746,97 @@ CMA Nouvelle-Aquitaine
 
 
 def page_letters() -> None:
-    render_header("Générateur de courriers", "Préparer un courrier personnalisé à partir du dossier entreprise.", "Documents")
-    options = {f"{c['raison_sociale']} — {c['commune']}": c["id"] for c in st.session_state.companies}
-    label = st.selectbox("Entreprise", list(options.keys()))
-    company = get_company(options[label])
-    c1, c2 = st.columns([1, 1.35], gap="large")
-    with c1:
-        recipient = st.text_input("Destinataire", value="Service compétent")
-        subject = st.text_input("Objet", value="Demande d’examen bienveillant de la situation")
-        request = st.text_area("Demande formulée", value="Nous demandons l’examen des solutions mobilisables et la mise en place d’un accompagnement adapté.", height=150)
-        advisor = st.text_input("Conseiller", value=st.session_state.current_advisor)
+    render_header(
+        "Courriers et démarches",
+        "Préparer le courrier, la liste des actions et les pièces à transmettre selon l’organisme.",
+        "Documents",
+    )
+
+    options = {
+        f"{company['raison_sociale']} — {company['commune']}": company["id"]
+        for company in st.session_state.companies
+    }
+    selected_label = st.selectbox("Entreprise", list(options.keys()))
+    company = get_company(options[selected_label])
+
+    organism = st.selectbox(
+        "Organisme destinataire",
+        list(ORGANISM_GUIDES.keys()),
+        key="selected_organism",
+    )
+    guide = ORGANISM_GUIDES[organism]
+
+    info_col, docs_col = st.columns(2, gap="large")
+
+    with info_col:
+        render_section_title(
+            "To-do list conseillée",
+            "Étapes de préparation et de suivi à adapter à la situation réelle.",
+        )
+        for index, task in enumerate(guide["tasks"], start=1):
+            st.checkbox(task, key=f"task_{organism}_{index}")
+
+    with docs_col:
+        render_section_title(
+            "Documents à préparer ou à joindre",
+            "La liste reste indicative : vérifiez les demandes précises de l’organisme.",
+        )
+        for index, document in enumerate(guide["documents"], start=1):
+            st.checkbox(document, key=f"doc_{organism}_{index}")
+
+    st.divider()
+    edit_col, preview_col = st.columns([1, 1.35], gap="large")
+
+    with edit_col:
+        recipient = st.text_input(
+            "Destinataire",
+            value=guide["recipient"],
+            key=f"recipient_{organism}",
+        )
+        subject = st.text_input(
+            "Objet",
+            value=guide["subject"],
+            key=f"subject_{organism}",
+        )
+        request = st.text_area(
+            "Demande formulée",
+            value=guide["request"],
+            height=170,
+            key=f"request_{organism}",
+        )
+        advisor = st.text_input(
+            "Conseiller",
+            value=st.session_state.current_advisor,
+            key="letter_advisor",
+        )
+
     letter = build_letter(company, recipient, subject, request, advisor)
-    with c2:
-        st.text_area("Aperçu", value=letter, height=520)
-        st.download_button("Télécharger le courrier", letter.encode("utf-8"), file_name="courrier.txt", mime="text/plain", type="primary", use_container_width=True)
-    st.warning("Le courrier doit être relu et validé avant envoi.")
+
+    with preview_col:
+        st.text_area(
+            "Aperçu du courrier",
+            value=letter,
+            height=535,
+            key=f"preview_{company['id']}_{organism}",
+        )
+        st.download_button(
+            "Télécharger le courrier",
+            data=letter.encode("utf-8"),
+            file_name=(
+                f"courrier_{organism}_{company['raison_sociale']}.txt"
+                .lower()
+                .replace(" ", "_")
+                .replace("/", "_")
+            ),
+            mime="text/plain",
+            type="primary",
+            use_container_width=True,
+        )
+
+    st.warning(
+        "Les démarches et pièces proposées sont des aides à la préparation. "
+        "Le conseiller doit vérifier les règles, délais et demandes en vigueur avant tout envoi."
+    )
 
 
 # ============================================================
