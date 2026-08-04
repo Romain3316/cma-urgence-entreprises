@@ -13,6 +13,7 @@ from typing import Any
 import pandas as pd
 import plotly.express as px
 import pydeck as pdk
+import requests
 import streamlit as st
 
 
@@ -976,6 +977,8 @@ def initialize_state() -> None:
         st.session_state.cellule_name = "Cellule de crise Gironde"
     if "current_advisor" not in st.session_state:
         st.session_state.current_advisor = "Romain"
+    if "lege_geocoded_data" not in st.session_state:
+        st.session_state.lege_geocoded_data = pd.DataFrame()
 
 
 # ============================================================
@@ -1379,12 +1382,13 @@ def render_sidebar() -> str:
             unsafe_allow_html=True,
         )
 
-        pages = ["Tableau de bord", "Nouveau diagnostic", "Entreprises", "Cartographie", "Statistiques", "Courriers", "Paramètres"]
+        pages = ["Tableau de bord", "Nouveau diagnostic", "Entreprises", "Cartographie", "Identification Lège-Cap-Ferret", "Statistiques", "Courriers", "Paramètres"]
         icons = {
             "Tableau de bord": "🏠",
             "Nouveau diagnostic": "➕",
             "Entreprises": "🏢",
             "Cartographie": "🗺️",
+            "Identification Lège-Cap-Ferret": "📍",
             "Statistiques": "📊",
             "Courriers": "📄",
             "Paramètres": "⚙️",
@@ -1949,6 +1953,547 @@ def render_company_record(company: dict[str, Any]) -> None:
         )
 
 
+
+# ============================================================
+# IDENTIFICATION LÈGE-CAP-FERRET
+# ============================================================
+
+LEGE_GEOCODING_URL = "https://data.geopf.fr/geocodage/search"
+LEGE_CENTER_LAT = 44.7935
+LEGE_CENTER_LON = -1.1460
+LEGE_DEFAULT_ZOOM = 10.4
+LEGE_EXPECTED_COLUMNS = ["Nom", "Adresse"]
+
+
+def create_lege_excel_template() -> bytes:
+    """Crée le modèle minimal attendu pour l'import."""
+    template = pd.DataFrame(
+        [
+            {
+                "Nom": "Entreprise exemple",
+                "Adresse": "1 avenue de la Mairie, 33950 Lège-Cap-Ferret",
+            }
+        ]
+    )
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        template.to_excel(writer, index=False, sheet_name="Adresses")
+    return buffer.getvalue()
+
+
+def normalize_lege_column_name(value: Any) -> str:
+    text = str(value).strip().casefold()
+    replacements = {
+        "nom entreprise": "nom",
+        "nom de l'entreprise": "nom",
+        "entreprise": "nom",
+        "entrepreneur": "nom",
+        "raison sociale": "nom",
+        "nom / entreprise": "nom",
+        "adresse postale": "adresse",
+        "adresse complète": "adresse",
+        "adresse complete": "adresse",
+    }
+    return replacements.get(text, text)
+
+
+def read_lege_import_file(uploaded_file) -> tuple[pd.DataFrame | None, list[str]]:
+    """Lit un fichier Excel ou CSV et conserve uniquement Nom + Adresse."""
+    errors: list[str] = []
+
+    try:
+        filename = uploaded_file.name.lower()
+        if filename.endswith(".csv"):
+            try:
+                df = pd.read_csv(uploaded_file, sep=None, engine="python", dtype=str)
+            except UnicodeDecodeError:
+                uploaded_file.seek(0)
+                df = pd.read_csv(
+                    uploaded_file,
+                    sep=None,
+                    engine="python",
+                    dtype=str,
+                    encoding="latin-1",
+                )
+        else:
+            df = pd.read_excel(uploaded_file, dtype=str)
+    except Exception as exc:
+        return None, [f"Impossible de lire le fichier : {exc}"]
+
+    renamed_columns = {
+        column: normalize_lege_column_name(column)
+        for column in df.columns
+    }
+    df = df.rename(columns=renamed_columns)
+
+    if "nom" not in df.columns or "adresse" not in df.columns:
+        return None, [
+            "Le fichier doit comporter deux colonnes : « Nom » et « Adresse »."
+        ]
+
+    clean_df = df[["nom", "adresse"]].copy()
+    clean_df.columns = LEGE_EXPECTED_COLUMNS
+    clean_df["Nom"] = clean_df["Nom"].fillna("").astype(str).str.strip()
+    clean_df["Adresse"] = clean_df["Adresse"].fillna("").astype(str).str.strip()
+
+    empty_rows = clean_df["Nom"].eq("") | clean_df["Adresse"].eq("")
+    if empty_rows.any():
+        errors.append(
+            f"{int(empty_rows.sum())} ligne(s) sans nom ou sans adresse seront ignorées."
+        )
+        clean_df = clean_df.loc[~empty_rows].copy()
+
+    clean_df = clean_df.drop_duplicates(
+        subset=["Nom", "Adresse"],
+        keep="first",
+    ).reset_index(drop=True)
+
+    if clean_df.empty:
+        return None, errors + ["Aucune ligne exploitable n’a été trouvée."]
+
+    return clean_df, errors
+
+
+def address_query_for_lege(address: str) -> str:
+    """Complète les adresses courtes afin de privilégier la commune ciblée."""
+    normalized = address.casefold()
+    commune_tokens = [
+        "lège-cap-ferret",
+        "lege-cap-ferret",
+        "cap ferret",
+        "cap-ferret",
+        "33950",
+    ]
+    if any(token in normalized for token in commune_tokens):
+        return address
+    return f"{address}, 33950 Lège-Cap-Ferret"
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def geocode_lege_address(address: str) -> dict[str, Any]:
+    """Géocode une adresse avec le service officiel de la Géoplateforme."""
+    query = address_query_for_lege(address)
+
+    try:
+        response = requests.get(
+            LEGE_GEOCODING_URL,
+            params={
+                "q": query,
+                "limit": 5,
+                "autocomplete": 0,
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        return {
+            "Statut géocodage": "Erreur API",
+            "Erreur": str(exc),
+        }
+    except ValueError:
+        return {
+            "Statut géocodage": "Réponse invalide",
+            "Erreur": "Le service de géocodage n’a pas renvoyé de JSON valide.",
+        }
+
+    features = payload.get("features", [])
+    if not features:
+        return {
+            "Statut géocodage": "Non trouvée",
+            "Erreur": "Aucun résultat pour cette adresse.",
+        }
+
+    # On privilégie les résultats associés à Lège-Cap-Ferret.
+    selected = None
+    for feature in features:
+        properties = feature.get("properties", {})
+        city = str(
+            properties.get("city")
+            or properties.get("municipality")
+            or properties.get("city_name")
+            or ""
+        ).casefold()
+        postcode = str(properties.get("postcode") or "")
+        context = str(properties.get("context") or "").casefold()
+
+        if (
+            "lège-cap-ferret" in city
+            or "lege-cap-ferret" in city
+            or postcode == "33950"
+            or "lège-cap-ferret" in context
+            or "lege-cap-ferret" in context
+        ):
+            selected = feature
+            break
+
+    if selected is None:
+        selected = features[0]
+
+    properties = selected.get("properties", {})
+    geometry = selected.get("geometry", {})
+    coordinates = geometry.get("coordinates", [])
+
+    if len(coordinates) < 2:
+        return {
+            "Statut géocodage": "Coordonnées absentes",
+            "Erreur": "Le résultat ne contient pas de coordonnées exploitables.",
+        }
+
+    longitude, latitude = coordinates[0], coordinates[1]
+    city = (
+        properties.get("city")
+        or properties.get("municipality")
+        or properties.get("city_name")
+        or ""
+    )
+    postcode = properties.get("postcode") or ""
+    label = properties.get("label") or properties.get("name") or query
+    score = properties.get("score")
+
+    is_lege = (
+        "lège-cap-ferret" in str(city).casefold()
+        or "lege-cap-ferret" in str(city).casefold()
+        or str(postcode) == "33950"
+        or "lège-cap-ferret" in str(label).casefold()
+        or "lege-cap-ferret" in str(label).casefold()
+    )
+
+    try:
+        score_value = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        score_value = None
+
+    if not is_lege:
+        status = "À vérifier — hors commune"
+    elif score_value is not None and score_value < 0.50:
+        status = "À vérifier — score faible"
+    else:
+        status = "Localisée"
+
+    return {
+        "Adresse reconnue": label,
+        "Commune reconnue": city,
+        "Code postal reconnu": postcode,
+        "Latitude": float(latitude),
+        "Longitude": float(longitude),
+        "Score": score_value,
+        "Statut géocodage": status,
+        "Erreur": "",
+    }
+
+
+def geocode_lege_dataframe(source_df: pd.DataFrame) -> pd.DataFrame:
+    """Géocode séquentiellement les lignes et affiche la progression."""
+    results: list[dict[str, Any]] = []
+    progress = st.progress(0)
+    status_placeholder = st.empty()
+    total = len(source_df)
+
+    for position, (_, row) in enumerate(source_df.iterrows(), start=1):
+        status_placeholder.caption(
+            f"Géocodage {position}/{total} : {row['Nom']}"
+        )
+        geocoded = geocode_lege_address(row["Adresse"])
+        results.append(
+            {
+                "Nom": row["Nom"],
+                "Adresse saisie": row["Adresse"],
+                **geocoded,
+            }
+        )
+        progress.progress(position / total)
+
+    status_placeholder.empty()
+    progress.empty()
+    return pd.DataFrame(results)
+
+
+def create_lege_export_excel(df: pd.DataFrame) -> bytes:
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Cartographie")
+        worksheet = writer.sheets["Cartographie"]
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+
+        widths = {
+            "A": 32,
+            "B": 48,
+            "C": 48,
+            "D": 24,
+            "E": 20,
+            "F": 14,
+            "G": 14,
+            "H": 12,
+            "I": 28,
+            "J": 38,
+        }
+        for column, width in widths.items():
+            worksheet.column_dimensions[column].width = width
+
+    return buffer.getvalue()
+
+
+def render_lege_map(df: pd.DataFrame) -> None:
+    valid = df.dropna(subset=["Latitude", "Longitude"]).copy()
+
+    if valid.empty:
+        st.info("Aucun point exploitable à afficher sur la carte.")
+        return
+
+    valid["Couleur"] = valid["Statut géocodage"].apply(
+        lambda status: (
+            [215, 25, 32, 225]
+            if status == "Localisée"
+            else [241, 145, 0, 225]
+        )
+    )
+    valid["Rayon"] = 95
+
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=valid,
+        get_position="[Longitude, Latitude]",
+        get_fill_color="Couleur",
+        get_line_color=[255, 255, 255, 245],
+        get_radius="Rayon",
+        radius_min_pixels=7,
+        radius_max_pixels=16,
+        line_width_min_pixels=2,
+        pickable=True,
+        stroked=True,
+        filled=True,
+        opacity=0.92,
+    )
+
+    deck = pdk.Deck(
+        map_style=None,
+        initial_view_state=pdk.ViewState(
+            latitude=LEGE_CENTER_LAT,
+            longitude=LEGE_CENTER_LON,
+            zoom=LEGE_DEFAULT_ZOOM,
+            pitch=0,
+        ),
+        layers=[layer],
+        tooltip={
+            "html": """
+                <div style="min-width:260px;font-family:Arial,sans-serif">
+                    <div style="font-size:15px;font-weight:800;margin-bottom:7px">
+                        {Nom}
+                    </div>
+                    <div><b>Adresse saisie :</b> {Adresse saisie}</div>
+                    <div><b>Adresse reconnue :</b> {Adresse reconnue}</div>
+                    <div><b>Commune :</b> {Commune reconnue}</div>
+                    <div><b>Résultat :</b> {Statut géocodage}</div>
+                </div>
+            """,
+            "style": {
+                "backgroundColor": "#111827",
+                "color": "white",
+                "borderRadius": "12px",
+                "padding": "12px",
+            },
+        },
+    )
+
+    st.pydeck_chart(deck, height=680, use_container_width=True)
+
+
+def page_lege_identification() -> None:
+    render_header(
+        "Identification Lège-Cap-Ferret",
+        "Importer une liste minimale de noms et d’adresses, géocoder les établissements puis les visualiser sur la commune.",
+        "Cartographie ciblée",
+    )
+
+    st.warning(
+        "Les adresses importées sont transmises au service officiel de géocodage "
+        "de la Géoplateforme afin d’obtenir leurs coordonnées. "
+        "N’utilisez ici que les données strictement nécessaires."
+    )
+
+    left, right = st.columns([1.1, 1.9], gap="large")
+
+    with left:
+        render_section_title(
+            "1. Importer les adresses",
+            "Le fichier doit contenir uniquement les colonnes Nom et Adresse.",
+        )
+
+        st.download_button(
+            "Télécharger le modèle Excel",
+            data=create_lege_excel_template(),
+            file_name="modele_identification_lege_cap_ferret.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+        uploaded = st.file_uploader(
+            "Déposer le fichier Excel ou CSV",
+            type=["xlsx", "xls", "csv"],
+            key="lege_address_import",
+        )
+
+        if uploaded is not None:
+            preview_df, warnings = read_lege_import_file(uploaded)
+
+            for warning in warnings:
+                st.warning(warning)
+
+            if preview_df is not None:
+                st.caption(f"{len(preview_df)} adresse(s) prête(s) à être traitée(s).")
+                st.dataframe(
+                    preview_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=280,
+                )
+
+                if st.button(
+                    "Géocoder et afficher sur la carte",
+                    type="primary",
+                    use_container_width=True,
+                    key="start_lege_geocoding",
+                ):
+                    with st.spinner("Géocodage des adresses en cours…"):
+                        st.session_state.lege_geocoded_data = geocode_lege_dataframe(
+                            preview_df
+                        )
+                    st.success("Géocodage terminé.")
+                    st.rerun()
+
+        if not st.session_state.lege_geocoded_data.empty:
+            st.divider()
+            if st.button(
+                "Effacer les données de cet onglet",
+                use_container_width=True,
+                key="clear_lege_data",
+            ):
+                st.session_state.lege_geocoded_data = pd.DataFrame()
+                st.rerun()
+
+    with right:
+        render_section_title(
+            "2. Cartographie des établissements",
+            "La vue est centrée sur Lège-Cap-Ferret et la presqu’île.",
+        )
+
+        result_df = st.session_state.lege_geocoded_data
+
+        if result_df.empty:
+            st.info(
+                "Importez un fichier puis lancez le géocodage pour afficher les points."
+            )
+            empty_df = pd.DataFrame(
+                {
+                    "Latitude": [LEGE_CENTER_LAT],
+                    "Longitude": [LEGE_CENTER_LON],
+                    "Nom": ["Lège-Cap-Ferret"],
+                    "Adresse saisie": [""],
+                    "Adresse reconnue": [""],
+                    "Commune reconnue": ["Lège-Cap-Ferret"],
+                    "Statut géocodage": ["Point de centrage"],
+                }
+            )
+            # Carte vide centrée sur la commune, sans point artificiel visible.
+            empty_layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=empty_df.iloc[0:0],
+                get_position="[Longitude, Latitude]",
+                pickable=False,
+            )
+            empty_deck = pdk.Deck(
+                map_style=None,
+                initial_view_state=pdk.ViewState(
+                    latitude=LEGE_CENTER_LAT,
+                    longitude=LEGE_CENTER_LON,
+                    zoom=LEGE_DEFAULT_ZOOM,
+                    pitch=0,
+                ),
+                layers=[empty_layer],
+            )
+            st.pydeck_chart(
+                empty_deck,
+                height=680,
+                use_container_width=True,
+            )
+        else:
+            localized = int(
+                result_df["Statut géocodage"].eq("Localisée").sum()
+            )
+            to_check = int(
+                result_df["Statut géocodage"]
+                .astype(str)
+                .str.startswith("À vérifier")
+                .sum()
+            )
+            failures = int(
+                result_df["Latitude"].isna().sum()
+            )
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Points localisés", localized)
+            m2.metric("À vérifier", to_check)
+            m3.metric("Non localisés", failures)
+
+            render_lege_map(result_df)
+
+    result_df = st.session_state.lege_geocoded_data
+    if not result_df.empty:
+        st.write("")
+        render_section_title(
+            "3. Contrôle des résultats",
+            "Vérifiez particulièrement les résultats orange et les adresses non reconnues.",
+        )
+
+        status_options = sorted(
+            result_df["Statut géocodage"].fillna("Non renseigné").unique()
+        )
+        selected_statuses = st.multiselect(
+            "Filtrer par résultat",
+            status_options,
+            default=status_options,
+            key="lege_status_filter",
+        )
+
+        displayed = result_df[
+            result_df["Statut géocodage"].isin(selected_statuses)
+        ].copy()
+
+        st.dataframe(
+            displayed,
+            use_container_width=True,
+            hide_index=True,
+            height=350,
+            column_config={
+                "Score": st.column_config.NumberColumn(
+                    "Score",
+                    format="%.2f",
+                    help="Indice de correspondance fourni par le géocodeur.",
+                ),
+                "Latitude": st.column_config.NumberColumn(
+                    "Latitude",
+                    format="%.6f",
+                ),
+                "Longitude": st.column_config.NumberColumn(
+                    "Longitude",
+                    format="%.6f",
+                ),
+            },
+        )
+
+        st.download_button(
+            "Télécharger les résultats géocodés",
+            data=create_lege_export_excel(result_df),
+            file_name="identification_lege_cap_ferret_geocodee.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    render_footer()
+
+
 # ============================================================
 # CARTOGRAPHIE
 # ============================================================
@@ -2316,6 +2861,8 @@ def main() -> None:
         page_companies()
     elif page == "Cartographie":
         page_map()
+    elif page == "Identification Lège-Cap-Ferret":
+        page_lege_identification()
     elif page == "Statistiques":
         page_statistics()
     elif page == "Courriers":
