@@ -1966,36 +1966,62 @@ LEGE_CENTER_LON = -1.1460
 LEGE_DEFAULT_ZOOM = 10.4
 LEGE_EXPECTED_COLUMNS = ["Nom", "Adresse"]
 
-# Classement opérationnel vérifié à partir de l'histoire territoriale
-# présentée par la commune :
-# - le secteur « Lège » correspond à l'ancienne partie nord rattachée à Lège ;
-# - le secteur « Cap-Ferret » correspond à l'ancienne partie sud, historiquement
-#   rattachée à La Teste-de-Buch jusqu'en 1976.
+# Classement géographique opérationnel fondé sur l'ancienne limite communale.
 #
-# La limite historique se situait aux portes de Grand Piquey :
-# Petit Piquey est donc classé dans le secteur Lège ;
-# Grand Piquey et les villages situés plus au sud sont classés Cap-Ferret.
+# Les sources historiques décrivent une ligne droite allant du Truc Vert,
+# côté océan, à la Pointe aux Chevaux, côté bassin. Cette ligne séparait
+# autrefois Lège (au nord) de La Teste / Cap-Ferret (au sud).
+#
+# Coordonnées WGS84 utilisées :
+# - Truc Vert : 44.715108, -1.249283
+# - Pointe aux Chevaux : 44.718090, -1.204960
+#
+# Les deux polygones ci-dessous sont des polygones opérationnels servant
+# uniquement au classement automatique dans l'application. Ils sont obtenus
+# en découpant l'emprise locale par cette ligne historique.
 
-LEGE_LOCALITIES = [
-    "lege",
-    "lege bourg",
-    "claouey",
-    "jane de boy",
-    "le four",
-    "les jacquets",
-    "petit piquey",
+TRUC_VERT_POINT = {
+    "latitude": 44.715108,
+    "longitude": -1.249283,
+}
+
+POINTE_AUX_CHEVAUX_POINT = {
+    "latitude": 44.718090,
+    "longitude": -1.204960,
+}
+
+# Emprise suffisamment large pour couvrir la commune et la presqu'île.
+SECTOR_BOUNDS = {
+    "west": -1.285,
+    "east": -1.105,
+    "south": 44.585,
+    "north": 45.000,
+}
+
+LEGE_SECTOR_POLYGON = [
+    [SECTOR_BOUNDS["west"], SECTOR_BOUNDS["north"]],
+    [SECTOR_BOUNDS["east"], SECTOR_BOUNDS["north"]],
+    [
+        POINTE_AUX_CHEVAUX_POINT["longitude"],
+        POINTE_AUX_CHEVAUX_POINT["latitude"],
+    ],
+    [
+        TRUC_VERT_POINT["longitude"],
+        TRUC_VERT_POINT["latitude"],
+    ],
 ]
 
-CAP_FERRET_LOCALITIES = [
-    "grand piquey",
-    "piraillan",
-    "le canon",
-    "l herbe",
-    "la vigne",
-    "cap ferret",
-    "belisaire",
-    "44 hectares",
-    "quarante quatre hectares",
+CAP_FERRET_SECTOR_POLYGON = [
+    [
+        TRUC_VERT_POINT["longitude"],
+        TRUC_VERT_POINT["latitude"],
+    ],
+    [
+        POINTE_AUX_CHEVAUX_POINT["longitude"],
+        POINTE_AUX_CHEVAUX_POINT["latitude"],
+    ],
+    [SECTOR_BOUNDS["east"], SECTOR_BOUNDS["south"]],
+    [SECTOR_BOUNDS["west"], SECTOR_BOUNDS["south"]],
 ]
 
 
@@ -2100,50 +2126,40 @@ def normalize_place_text(value: Any) -> str:
     return text
 
 
-def classify_lege_cap_ferret_sector(
-    original_address: str,
-    recognized_address: str,
-    recognized_city: str,
+def classify_lege_cap_ferret_sector_from_coordinates(
+    latitude: float,
+    longitude: float,
 ) -> tuple[str, str]:
     """
-    Classe l'adresse dans l'une des deux catégories opérationnelles vérifiées.
+    Classe un point par rapport à la ligne historique Truc Vert ->
+    Pointe aux Chevaux.
 
-    Règle retenue :
-    - secteur Lège : Lège, Claouey, Jane de Boy, Le Four, Les Jacquets,
-      Petit Piquey ;
-    - secteur Cap-Ferret : Grand Piquey, Piraillan, Le Canon, L'Herbe,
-      La Vigne, Cap-Ferret, Bélisaire et les 44 Hectares.
-
-    Une adresse qui ne contient aucun indice local suffisamment précis reste
-    « À vérifier ». La mention générique « Lège-Cap-Ferret » ou le code postal
-    33950 ne suffit pas, à elle seule, à classer l'adresse.
+    Le produit vectoriel permet de déterminer de quel côté de la ligne
+    se trouve l'adresse :
+    - côté nord : secteur Lège ;
+    - côté sud : secteur Cap-Ferret.
     """
-    combined = normalize_place_text(
-        f"{original_address} {recognized_address} {recognized_city}"
+    ax = TRUC_VERT_POINT["longitude"]
+    ay = TRUC_VERT_POINT["latitude"]
+    bx = POINTE_AUX_CHEVAUX_POINT["longitude"]
+    by = POINTE_AUX_CHEVAUX_POINT["latitude"]
+
+    cross_product = (
+        (bx - ax) * (latitude - ay)
+        - (by - ay) * (longitude - ax)
     )
 
-    # Les lieux très précis du Cap-Ferret sont testés en premier afin d'éviter
-    # qu'une mention générique « Lège-Cap-Ferret » ne prenne le dessus.
-    for locality in CAP_FERRET_LOCALITIES:
-        normalized_locality = normalize_place_text(locality)
-        if normalized_locality in combined:
-            return "Cap-Ferret", locality.title()
+    # Petite zone de tolérance autour de la limite afin de signaler les
+    # établissements extrêmement proches de l'ancienne frontière.
+    tolerance = 0.000035
 
-    for locality in LEGE_LOCALITIES:
-        normalized_locality = normalize_place_text(locality)
-        if normalized_locality in combined:
-            display_name = {
-                "lege": "Lège",
-                "lege bourg": "Lège",
-                "claouey": "Claouey",
-                "jane de boy": "Jane de Boy",
-                "le four": "Le Four",
-                "les jacquets": "Les Jacquets",
-                "petit piquey": "Petit Piquey",
-            }.get(locality, locality.title())
-            return "Lège", display_name
+    if abs(cross_product) <= tolerance:
+        return "À vérifier", "Proche de la limite historique"
 
-    return "À vérifier", "Localité non déterminée"
+    if cross_product > 0:
+        return "Lège", "Au nord de la limite historique"
+
+    return "Cap-Ferret", "Au sud de la limite historique"
 
 
 def address_query_for_lege(address: str) -> str:
@@ -2263,10 +2279,11 @@ def geocode_lege_address(address: str) -> dict[str, Any]:
     else:
         status = "Localisée"
 
-    secteur, localite_detectee = classify_lege_cap_ferret_sector(
-        original_address=address,
-        recognized_address=str(label),
-        recognized_city=str(city),
+    secteur, localite_detectee = (
+        classify_lege_cap_ferret_sector_from_coordinates(
+            latitude=float(latitude),
+            longitude=float(longitude),
+        )
     )
 
     # Une adresse située hors commune ne doit pas être affectée automatiquement.
@@ -2361,7 +2378,63 @@ def render_lege_map(df: pd.DataFrame) -> None:
     valid["Couleur"] = valid.apply(sector_color, axis=1)
     valid["Rayon"] = 95
 
-    layer = pdk.Layer(
+    lege_polygon_df = pd.DataFrame(
+        [{"Secteur": "Lège", "polygon": LEGE_SECTOR_POLYGON}]
+    )
+    cap_polygon_df = pd.DataFrame(
+        [{"Secteur": "Cap-Ferret", "polygon": CAP_FERRET_SECTOR_POLYGON}]
+    )
+    boundary_df = pd.DataFrame(
+        [
+            {
+                "from": [
+                    TRUC_VERT_POINT["longitude"],
+                    TRUC_VERT_POINT["latitude"],
+                ],
+                "to": [
+                    POINTE_AUX_CHEVAUX_POINT["longitude"],
+                    POINTE_AUX_CHEVAUX_POINT["latitude"],
+                ],
+            }
+        ]
+    )
+
+    lege_polygon_layer = pdk.Layer(
+        "PolygonLayer",
+        data=lege_polygon_df,
+        get_polygon="polygon",
+        get_fill_color=[38, 113, 221, 28],
+        get_line_color=[38, 113, 221, 120],
+        line_width_min_pixels=1,
+        stroked=True,
+        filled=True,
+        pickable=False,
+    )
+
+    cap_polygon_layer = pdk.Layer(
+        "PolygonLayer",
+        data=cap_polygon_df,
+        get_polygon="polygon",
+        get_fill_color=[215, 25, 32, 28],
+        get_line_color=[215, 25, 32, 120],
+        line_width_min_pixels=1,
+        stroked=True,
+        filled=True,
+        pickable=False,
+    )
+
+    boundary_layer = pdk.Layer(
+        "LineLayer",
+        data=boundary_df,
+        get_source_position="from",
+        get_target_position="to",
+        get_color=[102, 112, 133, 220],
+        get_width=5,
+        width_min_pixels=3,
+        pickable=False,
+    )
+
+    point_layer = pdk.Layer(
         "ScatterplotLayer",
         data=valid,
         get_position="[Longitude, Latitude]",
@@ -2385,7 +2458,12 @@ def render_lege_map(df: pd.DataFrame) -> None:
             zoom=LEGE_DEFAULT_ZOOM,
             pitch=0,
         ),
-        layers=[layer],
+        layers=[
+            lege_polygon_layer,
+            cap_polygon_layer,
+            boundary_layer,
+            point_layer,
+        ],
         tooltip={
             "html": """
                 <div style="min-width:260px;font-family:Arial,sans-serif">
@@ -2488,7 +2566,7 @@ def page_lege_identification() -> None:
     with right:
         render_section_title(
             "2. Cartographie des établissements",
-            "La vue est centrée sur Lège-Cap-Ferret. Le classement distingue le secteur Lège du secteur Cap-Ferret selon la limite historique située aux portes de Grand Piquey.",
+            "La vue est centrée sur Lège-Cap-Ferret. Les zones bleue et rouge représentent les deux secteurs opérationnels séparés par l'ancienne limite Truc Vert – Pointe aux Chevaux.",
         )
 
         result_df = st.session_state.lege_geocoded_data
@@ -2532,12 +2610,11 @@ def page_lege_identification() -> None:
             )
         else:
             st.info(
-                "Règle de classement : Lège, Claouey, Jane de Boy, Le Four, "
-                "Les Jacquets et Petit Piquey sont classés « Lège ». "
-                "Grand Piquey, Piraillan, Le Canon, L’Herbe, La Vigne, "
-                "Bélisaire, les 44 Hectares et le Cap-Ferret sont classés "
-                "« Cap-Ferret ». Les cas sans localité identifiable restent "
-                "« À vérifier »."
+                "Le classement utilise maintenant uniquement les coordonnées "
+                "obtenues à partir de l’adresse. La ligne historique Truc Vert – "
+                "Pointe aux Chevaux sépare le secteur Lège, au nord, du secteur "
+                "Cap-Ferret, au sud. Les points situés au voisinage immédiat de "
+                "la limite sont placés dans « À vérifier »."
             )
 
             lege_count = int(result_df["Secteur"].eq("Lège").sum())
@@ -2570,6 +2647,10 @@ def page_lege_identification() -> None:
                     <span style="color:#667085;font-size:12px">
                         <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#F19100;margin-right:5px"></span>
                         À vérifier
+                    </span>
+                    <span style="color:#667085;font-size:12px">
+                        <span style="display:inline-block;width:18px;height:3px;background:#667085;margin-right:5px;vertical-align:middle"></span>
+                        Ancienne limite communale
                     </span>
                 </div>
                 """,
