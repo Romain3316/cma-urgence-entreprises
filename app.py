@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Any
+import re
+import unicodedata
 
 import pandas as pd
 import plotly.express as px
@@ -1964,6 +1966,38 @@ LEGE_CENTER_LON = -1.1460
 LEGE_DEFAULT_ZOOM = 10.4
 LEGE_EXPECTED_COLUMNS = ["Nom", "Adresse"]
 
+# Classement opérationnel vérifié à partir de l'histoire territoriale
+# présentée par la commune :
+# - le secteur « Lège » correspond à l'ancienne partie nord rattachée à Lège ;
+# - le secteur « Cap-Ferret » correspond à l'ancienne partie sud, historiquement
+#   rattachée à La Teste-de-Buch jusqu'en 1976.
+#
+# La limite historique se situait aux portes de Grand Piquey :
+# Petit Piquey est donc classé dans le secteur Lège ;
+# Grand Piquey et les villages situés plus au sud sont classés Cap-Ferret.
+
+LEGE_LOCALITIES = [
+    "lege",
+    "lege bourg",
+    "claouey",
+    "jane de boy",
+    "le four",
+    "les jacquets",
+    "petit piquey",
+]
+
+CAP_FERRET_LOCALITIES = [
+    "grand piquey",
+    "piraillan",
+    "le canon",
+    "l herbe",
+    "la vigne",
+    "cap ferret",
+    "belisaire",
+    "44 hectares",
+    "quarante quatre hectares",
+]
+
 
 def create_lege_excel_template() -> bytes:
     """Crée le modèle minimal attendu pour l'import."""
@@ -2052,6 +2086,64 @@ def read_lege_import_file(uploaded_file) -> tuple[pd.DataFrame | None, list[str]
         return None, errors + ["Aucune ligne exploitable n’a été trouvée."]
 
     return clean_df, errors
+
+
+
+def normalize_place_text(value: Any) -> str:
+    """Normalise un texte pour faciliter la reconnaissance des villages."""
+    text = "" if value is None else str(value)
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = text.casefold()
+    text = re.sub(r"[-’']", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def classify_lege_cap_ferret_sector(
+    original_address: str,
+    recognized_address: str,
+    recognized_city: str,
+) -> tuple[str, str]:
+    """
+    Classe l'adresse dans l'une des deux catégories opérationnelles vérifiées.
+
+    Règle retenue :
+    - secteur Lège : Lège, Claouey, Jane de Boy, Le Four, Les Jacquets,
+      Petit Piquey ;
+    - secteur Cap-Ferret : Grand Piquey, Piraillan, Le Canon, L'Herbe,
+      La Vigne, Cap-Ferret, Bélisaire et les 44 Hectares.
+
+    Une adresse qui ne contient aucun indice local suffisamment précis reste
+    « À vérifier ». La mention générique « Lège-Cap-Ferret » ou le code postal
+    33950 ne suffit pas, à elle seule, à classer l'adresse.
+    """
+    combined = normalize_place_text(
+        f"{original_address} {recognized_address} {recognized_city}"
+    )
+
+    # Les lieux très précis du Cap-Ferret sont testés en premier afin d'éviter
+    # qu'une mention générique « Lège-Cap-Ferret » ne prenne le dessus.
+    for locality in CAP_FERRET_LOCALITIES:
+        normalized_locality = normalize_place_text(locality)
+        if normalized_locality in combined:
+            return "Cap-Ferret", locality.title()
+
+    for locality in LEGE_LOCALITIES:
+        normalized_locality = normalize_place_text(locality)
+        if normalized_locality in combined:
+            display_name = {
+                "lege": "Lège",
+                "lege bourg": "Lège",
+                "claouey": "Claouey",
+                "jane de boy": "Jane de Boy",
+                "le four": "Le Four",
+                "les jacquets": "Les Jacquets",
+                "petit piquey": "Petit Piquey",
+            }.get(locality, locality.title())
+            return "Lège", display_name
+
+    return "À vérifier", "Localité non déterminée"
 
 
 def address_query_for_lege(address: str) -> str:
@@ -2171,10 +2263,23 @@ def geocode_lege_address(address: str) -> dict[str, Any]:
     else:
         status = "Localisée"
 
+    secteur, localite_detectee = classify_lege_cap_ferret_sector(
+        original_address=address,
+        recognized_address=str(label),
+        recognized_city=str(city),
+    )
+
+    # Une adresse située hors commune ne doit pas être affectée automatiquement.
+    if not is_lege:
+        secteur = "À vérifier"
+        localite_detectee = "Hors commune ou résultat ambigu"
+
     return {
         "Adresse reconnue": label,
         "Commune reconnue": city,
         "Code postal reconnu": postcode,
+        "Secteur": secteur,
+        "Localité détectée": localite_detectee,
         "Latitude": float(latitude),
         "Longitude": float(longitude),
         "Score": score_value,
@@ -2223,11 +2328,13 @@ def create_lege_export_excel(df: pd.DataFrame) -> bytes:
             "C": 48,
             "D": 24,
             "E": 20,
-            "F": 14,
-            "G": 14,
-            "H": 12,
-            "I": 28,
-            "J": 38,
+            "F": 18,
+            "G": 24,
+            "H": 14,
+            "I": 14,
+            "J": 12,
+            "K": 28,
+            "L": 38,
         }
         for column, width in widths.items():
             worksheet.column_dimensions[column].width = width
@@ -2242,13 +2349,16 @@ def render_lege_map(df: pd.DataFrame) -> None:
         st.info("Aucun point exploitable à afficher sur la carte.")
         return
 
-    valid["Couleur"] = valid["Statut géocodage"].apply(
-        lambda status: (
-            [215, 25, 32, 225]
-            if status == "Localisée"
-            else [241, 145, 0, 225]
-        )
-    )
+    def sector_color(row: pd.Series) -> list[int]:
+        if str(row.get("Statut géocodage", "")).startswith("À vérifier"):
+            return [241, 145, 0, 225]
+        if row.get("Secteur") == "Lège":
+            return [38, 113, 221, 225]
+        if row.get("Secteur") == "Cap-Ferret":
+            return [215, 25, 32, 225]
+        return [102, 112, 133, 225]
+
+    valid["Couleur"] = valid.apply(sector_color, axis=1)
     valid["Rayon"] = 95
 
     layer = pdk.Layer(
@@ -2285,6 +2395,8 @@ def render_lege_map(df: pd.DataFrame) -> None:
                     <div><b>Adresse saisie :</b> {Adresse saisie}</div>
                     <div><b>Adresse reconnue :</b> {Adresse reconnue}</div>
                     <div><b>Commune :</b> {Commune reconnue}</div>
+                    <div><b>Catégorie :</b> {Secteur}</div>
+                    <div><b>Localité détectée :</b> {Localité détectée}</div>
                     <div><b>Résultat :</b> {Statut géocodage}</div>
                 </div>
             """,
@@ -2376,7 +2488,7 @@ def page_lege_identification() -> None:
     with right:
         render_section_title(
             "2. Cartographie des établissements",
-            "La vue est centrée sur Lège-Cap-Ferret et la presqu’île.",
+            "La vue est centrée sur Lège-Cap-Ferret. Le classement distingue le secteur Lège du secteur Cap-Ferret selon la limite historique située aux portes de Grand Piquey.",
         )
 
         result_df = st.session_state.lege_geocoded_data
@@ -2419,25 +2531,55 @@ def page_lege_identification() -> None:
                 use_container_width=True,
             )
         else:
-            localized = int(
-                result_df["Statut géocodage"].eq("Localisée").sum()
+            st.info(
+                "Règle de classement : Lège, Claouey, Jane de Boy, Le Four, "
+                "Les Jacquets et Petit Piquey sont classés « Lège ». "
+                "Grand Piquey, Piraillan, Le Canon, L’Herbe, La Vigne, "
+                "Bélisaire, les 44 Hectares et le Cap-Ferret sont classés "
+                "« Cap-Ferret ». Les cas sans localité identifiable restent "
+                "« À vérifier »."
             )
-            to_check = int(
-                result_df["Statut géocodage"]
-                .astype(str)
-                .str.startswith("À vérifier")
-                .sum()
-            )
-            failures = int(
-                result_df["Latitude"].isna().sum()
-            )
+
+            lege_count = int(result_df["Secteur"].eq("Lège").sum())
+            cap_count = int(result_df["Secteur"].eq("Cap-Ferret").sum())
+            to_check = int(result_df["Secteur"].eq("À vérifier").sum())
 
             m1, m2, m3 = st.columns(3)
-            m1.metric("Points localisés", localized)
-            m2.metric("À vérifier", to_check)
-            m3.metric("Non localisés", failures)
+            m1.metric("Entreprises de Lège", lege_count)
+            m2.metric("Entreprises du Cap-Ferret", cap_count)
+            m3.metric("À vérifier", to_check)
 
-            render_lege_map(result_df)
+            selected_sectors = st.multiselect(
+                "Afficher sur la carte",
+                ["Lège", "Cap-Ferret", "À vérifier"],
+                default=["Lège", "Cap-Ferret", "À vérifier"],
+                key="lege_map_sector_filter",
+            )
+
+            st.markdown(
+                """
+                <div style="display:flex;gap:18px;flex-wrap:wrap;margin:.15rem 0 .7rem">
+                    <span style="color:#667085;font-size:12px">
+                        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#2671DD;margin-right:5px"></span>
+                        Lège
+                    </span>
+                    <span style="color:#667085;font-size:12px">
+                        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#D71920;margin-right:5px"></span>
+                        Cap-Ferret
+                    </span>
+                    <span style="color:#667085;font-size:12px">
+                        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#F19100;margin-right:5px"></span>
+                        À vérifier
+                    </span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            map_df = result_df[
+                result_df["Secteur"].isin(selected_sectors)
+            ].copy()
+            render_lege_map(map_df)
 
     result_df = st.session_state.lege_geocoded_data
     if not result_df.empty:
@@ -2483,8 +2625,47 @@ def page_lege_identification() -> None:
             },
         )
 
+        st.write("")
+        render_section_title(
+            "4. Extraire les catégories",
+            "Téléchargez l’ensemble des résultats ou une extraction séparée par secteur.",
+        )
+
+        lege_export = result_df[result_df["Secteur"] == "Lège"].copy()
+        cap_export = result_df[result_df["Secteur"] == "Cap-Ferret"].copy()
+        verify_export = result_df[result_df["Secteur"] == "À vérifier"].copy()
+
+        download_cols = st.columns(3)
+        with download_cols[0]:
+            st.download_button(
+                f"Extraire Lège ({len(lege_export)})",
+                data=create_lege_export_excel(lege_export),
+                file_name="entreprises_lege.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                disabled=lege_export.empty,
+            )
+        with download_cols[1]:
+            st.download_button(
+                f"Extraire Cap-Ferret ({len(cap_export)})",
+                data=create_lege_export_excel(cap_export),
+                file_name="entreprises_cap_ferret.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                disabled=cap_export.empty,
+            )
+        with download_cols[2]:
+            st.download_button(
+                f"Extraire à vérifier ({len(verify_export)})",
+                data=create_lege_export_excel(verify_export),
+                file_name="entreprises_a_verifier.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                disabled=verify_export.empty,
+            )
+
         st.download_button(
-            "Télécharger les résultats géocodés",
+            "Télécharger l’ensemble des résultats géocodés",
             data=create_lege_export_excel(result_df),
             file_name="identification_lege_cap_ferret_geocodee.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
