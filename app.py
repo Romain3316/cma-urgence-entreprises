@@ -36,11 +36,41 @@ BORDER_COLOR = "#E3E7ED"
 
 GEOCODING_URL = "https://data.geopf.fr/geocodage/search"
 
+CONTACT_STATES = [
+    "Entreprise contactée",
+    "Message vocal & mail envoyé",
+    "Mauvais numéro",
+    "Déjà contactée",
+    "À rappeler",
+    "Non renseigné",
+]
+
+CONTACT_STATE_COLORS = {
+    "Entreprise contactée": [22, 163, 74, 225],
+    "Message vocal & mail envoyé": [6, 182, 212, 225],
+    "Mauvais numéro": [185, 28, 28, 225],
+    "Déjà contactée": [234, 88, 12, 225],
+    "À rappeler": [241, 145, 0, 225],
+    "Non renseigné": [102, 112, 133, 225],
+}
+
+CONTACT_STATE_HEX = {
+    key: "#{:02X}{:02X}{:02X}".format(*value[:3])
+    for key, value in CONTACT_STATE_COLORS.items()
+}
+
+FINAL_CONTACT_STATES = {
+    "Entreprise contactée",
+    "Mauvais numéro",
+    "Déjà contactée",
+}
+
 IMPORT_COLUMNS = [
     "Nom de l'entreprise",
     "Adresse",
     "Commune",
     "Date de l'appel",
+    "État du contact",
     "Commentaire",
 ]
 
@@ -518,6 +548,46 @@ def commune_to_epci(commune: str) -> tuple[str, str]:
     return "Autre / à vérifier", "Autre territoire"
 
 
+def normalize_contact_state(value: Any) -> str:
+    """Uniformise les libellés provenant d'Excel ou de Microsoft Lists."""
+    text = normalize_place(value)
+
+    aliases = {
+        "entreprise contactee": "Entreprise contactée",
+        "contacte": "Entreprise contactée",
+        "contactee": "Entreprise contactée",
+        "message vocal mail envoye": "Message vocal & mail envoyé",
+        "message vocal et mail envoye": "Message vocal & mail envoyé",
+        "message vocal & mail envoye": "Message vocal & mail envoyé",
+        "message vocal": "Message vocal & mail envoyé",
+        "mail envoye": "Message vocal & mail envoyé",
+        "mauvais numero": "Mauvais numéro",
+        "numero incorrect": "Mauvais numéro",
+        "deja contactee": "Déjà contactée",
+        "deja contacte": "Déjà contactée",
+        "a rappeler": "À rappeler",
+        "rappel": "À rappeler",
+        "non renseigne": "Non renseigné",
+        "": "Non renseigné",
+    }
+    return aliases.get(text, normalize_text(value) or "Non renseigné")
+
+
+def contact_progress_rate(df: pd.DataFrame) -> float:
+    """Part des lignes dont le traitement est considéré comme terminé."""
+    if df.empty or "État du contact" not in df.columns:
+        return 0.0
+    completed = df["État du contact"].isin(FINAL_CONTACT_STATES).sum()
+    return round(float(completed) / len(df) * 100, 1)
+
+
+def contact_state_counts(df: pd.DataFrame) -> dict[str, int]:
+    if df.empty or "État du contact" not in df.columns:
+        return {state: 0 for state in CONTACT_STATES}
+    counts = df["État du contact"].value_counts().to_dict()
+    return {state: int(counts.get(state, 0)) for state in CONTACT_STATES}
+
+
 def classify_comment_theme(comment: str) -> str:
     text = normalize_place(comment)
 
@@ -617,6 +687,7 @@ def create_crisis_excel_template() -> bytes:
                 "Adresse": "1 avenue de la Mairie",
                 "Commune": "Lège-Cap-Ferret",
                 "Date de l'appel": date.today().strftime("%d/%m/%Y"),
+                "État du contact": "Entreprise contactée",
                 "Commentaire": "Entreprise contactée et orientée vers son assurance.",
             }
         ]
@@ -643,6 +714,11 @@ def normalize_import_column(column: Any) -> str:
         "date": "Date de l'appel",
         "date appel": "Date de l'appel",
         "date de l appel": "Date de l'appel",
+        "etat": "État du contact",
+        "etat contact": "État du contact",
+        "etat du contact": "État du contact",
+        "statut contact": "État du contact",
+        "statut du contact": "État du contact",
         "commentaire": "Commentaire",
         "commentaires": "Commentaire",
         "observation": "Commentaire",
@@ -683,9 +759,16 @@ def read_uploaded_file(uploaded_file) -> tuple[pd.DataFrame | None, list[str]]:
 
     clean = df[IMPORT_COLUMNS].copy()
 
-    for column in ["Nom de l'entreprise", "Adresse", "Commune", "Commentaire"]:
+    for column in [
+        "Nom de l'entreprise",
+        "Adresse",
+        "Commune",
+        "État du contact",
+        "Commentaire",
+    ]:
         clean[column] = clean[column].fillna("").astype(str).str.strip()
 
+    clean["État du contact"] = clean["État du contact"].apply(normalize_contact_state)
     clean["Date de l'appel"] = clean["Date de l'appel"].apply(parse_call_date)
 
     invalid = (
@@ -845,6 +928,7 @@ def enrich_dataframe(source_df: pd.DataFrame) -> pd.DataFrame:
                 "Adresse": row["Adresse"],
                 "Commune": row["Commune"],
                 "Date de l'appel": row["Date de l'appel"],
+                "État du contact": normalize_contact_state(row["État du contact"]),
                 "Commentaire": comment,
                 "Thématique": classify_comment_theme(comment),
                 "EPCI / CDC": epci,
@@ -932,9 +1016,21 @@ def render_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
             key=f"{key_prefix}_commune",
         )
 
-    row2 = st.columns([1.4, 1.4, 1.2, 1.6], gap="medium")
+    row2 = st.columns([1.35, 1.35, 1.35, 1.05, 1.55], gap="medium")
 
     with row2[0]:
+        contact_options = [
+            state for state in CONTACT_STATES
+            if state in set(df["État du contact"].dropna().unique())
+        ]
+        selected_contact_states = st.multiselect(
+            "État du contact",
+            contact_options,
+            default=contact_options,
+            key=f"{key_prefix}_contact_state",
+        )
+
+    with row2[1]:
         theme_options = sorted(df["Thématique"].dropna().unique())
         selected_themes = st.multiselect(
             "Thématique du commentaire",
@@ -943,7 +1039,7 @@ def render_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
             key=f"{key_prefix}_theme",
         )
 
-    with row2[1]:
+    with row2[2]:
         geo_options = sorted(df["Statut géocodage"].fillna("Non renseigné").unique())
         selected_geo = st.multiselect(
             "Qualité de géolocalisation",
@@ -952,14 +1048,14 @@ def render_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
             key=f"{key_prefix}_geo",
         )
 
-    with row2[2]:
+    with row2[3]:
         comments_only = st.checkbox(
             "Avec commentaire uniquement",
             value=False,
             key=f"{key_prefix}_comments",
         )
 
-    with row2[3]:
+    with row2[4]:
         search = st.text_input(
             "Rechercher une entreprise",
             placeholder="Nom de l'entreprise…",
@@ -974,6 +1070,10 @@ def render_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
         filtered = filtered[filtered["EPCI / CDC"].isin(selected_epci)]
     if selected_communes:
         filtered = filtered[filtered["Commune"].isin(selected_communes)]
+    if selected_contact_states:
+        filtered = filtered[
+            filtered["État du contact"].isin(selected_contact_states)
+        ]
     if selected_themes:
         filtered = filtered[filtered["Thématique"].isin(selected_themes)]
     if selected_geo:
@@ -1017,7 +1117,10 @@ def render_crisis_map(
         st.info("Aucun point géolocalisé ne correspond aux filtres.")
         return
 
-    valid["Couleur"] = valid["Thématique"].map(THEME_COLORS)
+    valid["Couleur"] = valid["État du contact"].map(CONTACT_STATE_COLORS)
+    valid["Couleur"] = valid["Couleur"].apply(
+        lambda value: value if isinstance(value, list) else CONTACT_STATE_COLORS["Non renseigné"]
+    )
     valid["Rayon"] = 110
     valid["Nom_affichage"] = valid["Nom de l'entreprise"].apply(safe_tooltip_text)
     valid["Adresse_affichage"] = valid["Adresse"].apply(safe_tooltip_text)
@@ -1084,6 +1187,7 @@ def render_crisis_map(
                     <div><b>Commune :</b> {Commune}</div>
                     <div><b>CDC / EPCI :</b> {EPCI / CDC}</div>
                     <div><b>Date de l'appel :</b> {Date_affichage}</div>
+                    <div><b>État du contact :</b> {État du contact}</div>
                     <div><b>Thématique :</b> {Thématique}</div>
                     <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.25)">
                         <b>Commentaire :</b><br>{Commentaire_affichage}
@@ -1100,6 +1204,19 @@ def render_crisis_map(
     )
 
     st.pydeck_chart(deck, height=height, use_container_width=True)
+
+
+def render_contact_state_legend(states: list[str]) -> None:
+    html_parts = []
+    for state in states:
+        color = CONTACT_STATE_HEX.get(state, "#667085")
+        html_parts.append(
+            f'<span style="display:inline-flex;align-items:center;margin-right:14px;'
+            f'margin-bottom:7px;font-size:12px;color:#667085">'
+            f'<span style="width:9px;height:9px;border-radius:50%;background:{color};'
+            f'margin-right:5px"></span>{html.escape(state)}</span>'
+        )
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
 
 
 def render_theme_legend(themes: list[str]) -> None:
@@ -1176,6 +1293,16 @@ def report_metrics(df: pd.DataFrame) -> dict[str, Any]:
 
 def create_html_report(df: pd.DataFrame) -> bytes:
     metrics = report_metrics(df)
+
+    by_contact_state = (
+        df.groupby("État du contact")
+        .size()
+        .sort_values(ascending=False)
+        .to_dict()
+        if not df.empty
+        else {}
+    )
+    progress_rate = contact_progress_rate(df)
 
     by_epci = (
         df.groupby("EPCI / CDC")
@@ -1281,6 +1408,12 @@ footer {{
     <div class="metric"><strong>{metrics['epci']}</strong>CDC / EPCI concernés</div>
     <div class="metric"><strong>{metrics['localized']}</strong>entreprises localisées</div>
 </div>
+
+<section>
+    <h2>État de la campagne d'appels</h2>
+    <p><strong>Avancement estimé :</strong> {progress_rate} %</p>
+    <ul>{list_items(by_contact_state)}</ul>
+</section>
 
 <section>
     <h2>Répartition par CDC / EPCI</h2>
@@ -1392,7 +1525,7 @@ def render_sidebar() -> str:
 def page_import() -> None:
     render_header(
         "Importer les entreprises appelées",
-        "Chargez uniquement le nom de l'entreprise, son adresse, sa commune, la date de l'appel et un commentaire factuel.",
+        "Chargez le nom de l'entreprise, son adresse, sa commune, la date de l'appel, l'état du contact et un commentaire factuel.",
         "Préparation des données",
     )
 
@@ -1404,10 +1537,10 @@ def page_import() -> None:
     left, right = st.columns([1, 1.6], gap="large")
 
     with left:
-        render_section_title("Fichier attendu", "Excel ou CSV, avec cinq colonnes obligatoires.")
+        render_section_title("Fichier attendu", "Excel ou CSV, avec six colonnes obligatoires.")
 
         st.code(
-            "Nom de l'entreprise | Adresse | Commune | Date de l'appel | Commentaire"
+            "Nom de l'entreprise | Adresse | Commune | Date de l'appel | État du contact | Commentaire"
         )
 
         st.download_button(
@@ -1477,18 +1610,42 @@ def page_dashboard() -> None:
 
     filtered = render_filters(df, "dashboard")
     metrics = report_metrics(filtered)
+    state_counts = contact_state_counts(filtered)
+    progress_rate = contact_progress_rate(filtered)
 
-    cols = st.columns(5)
+    cols = st.columns(6)
     with cols[0]:
         render_metric("Entreprises appelées", metrics["total"], "Après application des filtres")
     with cols[1]:
-        render_metric("Communes", metrics["communes"], "Territoires communaux concernés")
+        render_metric(
+            "Entreprises contactées",
+            state_counts["Entreprise contactée"],
+            "Échange direct réalisé",
+        )
     with cols[2]:
-        render_metric("CDC / EPCI", metrics["epci"], "Interlocuteurs territoriaux")
+        render_metric(
+            "Message vocal & mail",
+            state_counts["Message vocal & mail envoyé"],
+            "Relance ou retour potentiel",
+        )
     with cols[3]:
-        render_metric("Géolocalisées", metrics["localized"], "Points exploitables sur la carte")
+        render_metric(
+            "Mauvais numéros",
+            state_counts["Mauvais numéro"],
+            "Coordonnée téléphonique inutilisable",
+        )
     with cols[4]:
-        render_metric("Commentaires", metrics["comments"], "Appels avec une synthèse")
+        render_metric(
+            "Déjà contactées",
+            state_counts["Déjà contactée"],
+            "Entreprise déjà prise en charge",
+        )
+    with cols[5]:
+        render_metric(
+            "Avancement",
+            f"{progress_rate} %",
+            "Traitements considérés comme terminés",
+        )
 
     st.write("")
     map_col, chart_col = st.columns([2.15, 1], gap="large")
@@ -1499,7 +1656,7 @@ def page_dashboard() -> None:
             "Cartographie opérationnelle",
             "Le commentaire apparaît au survol de chaque point.",
         )
-        render_theme_legend(sorted(filtered["Thématique"].dropna().unique()))
+        render_contact_state_legend([state for state in CONTACT_STATES if state in set(filtered["État du contact"].dropna().unique())])
         render_crisis_map(filtered, height=610, heatmap=False)
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1529,24 +1686,24 @@ def page_dashboard() -> None:
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        theme_counts = (
-            filtered.groupby("Thématique")
+        contact_counts = (
+            filtered.groupby("État du contact")
             .size()
             .reset_index(name="Entreprises")
         )
         fig = px.pie(
-            theme_counts,
-            names="Thématique",
+            contact_counts,
+            names="État du contact",
             values="Entreprises",
             hole=.62,
-            color="Thématique",
-            color_discrete_map=THEME_HEX,
+            color="État du contact",
+            color_discrete_map=CONTACT_STATE_HEX,
         )
         fig.update_layout(
             height=330,
             margin=dict(l=5, r=5, t=45, b=10),
             paper_bgcolor="rgba(0,0,0,0)",
-            title="Thématiques des commentaires",
+            title="État de la campagne d'appels",
             legend=dict(orientation="h", yanchor="top", y=-0.12),
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -1611,7 +1768,7 @@ def page_map() -> None:
         )
 
     with c2:
-        render_theme_legend(sorted(filtered["Thématique"].dropna().unique()))
+        render_contact_state_legend([state for state in CONTACT_STATES if state in set(filtered["État du contact"].dropna().unique())])
         render_crisis_map(filtered, height=735, heatmap=heatmap)
 
     render_section_title(
@@ -1623,6 +1780,7 @@ def page_map() -> None:
         "Adresse",
         "Commune",
         "Date de l'appel",
+        "État du contact",
         "EPCI / CDC",
         "Grand territoire",
         "Thématique",
@@ -1655,36 +1813,54 @@ def page_report() -> None:
     filtered = render_filters(df, "report")
     metrics = report_metrics(filtered)
 
-    cols = st.columns(4)
+    state_counts = contact_state_counts(filtered)
+    progress_rate = contact_progress_rate(filtered)
+
+    cols = st.columns(6)
     with cols[0]:
         render_metric("Entreprises appelées", metrics["total"], f"Du {metrics['first_date']} au {metrics['last_date']}")
     with cols[1]:
-        render_metric("Communes concernées", metrics["communes"], "Répartition territoriale")
+        render_metric("Contactées", state_counts["Entreprise contactée"], "Échange direct réalisé")
     with cols[2]:
-        render_metric("CDC / EPCI concernés", metrics["epci"], "Partenaires locaux concernés")
+        render_metric("Message vocal & mail", state_counts["Message vocal & mail envoyé"], "Retour potentiel")
     with cols[3]:
-        rate = round((metrics["localized"] / metrics["total"] * 100), 1) if metrics["total"] else 0
-        render_metric("Taux géolocalisé", f"{rate} %", "Qualité de la cartographie")
+        render_metric("Mauvais numéros", state_counts["Mauvais numéro"], "Coordonnées à corriger")
+    with cols[4]:
+        render_metric("Déjà contactées", state_counts["Déjà contactée"], "Traitement déjà réalisé")
+    with cols[5]:
+        render_metric("Avancement", f"{progress_rate} %", "Campagne considérée comme traitée")
 
     st.write("")
-    c1, c2 = st.columns(2, gap="large")
+    c1, c2, c3 = st.columns(3, gap="large")
 
     with c1:
+        contact_counts = (
+            filtered.groupby("État du contact")
+            .size()
+            .reset_index(name="Entreprises")
+            .sort_values("Entreprises", ascending=False)
+        )
+        st.caption("Répartition par état du contact")
+        st.dataframe(contact_counts, use_container_width=True, hide_index=True)
+
+    with c2:
         epci_counts = (
             filtered.groupby("EPCI / CDC")
             .size()
             .reset_index(name="Entreprises")
             .sort_values("Entreprises", ascending=False)
         )
+        st.caption("Répartition par CDC / EPCI")
         st.dataframe(epci_counts, use_container_width=True, hide_index=True)
 
-    with c2:
+    with c3:
         theme_counts = (
             filtered.groupby("Thématique")
             .size()
             .reset_index(name="Entreprises")
             .sort_values("Entreprises", ascending=False)
         )
+        st.caption("Thématiques des commentaires")
         st.dataframe(theme_counts, use_container_width=True, hide_index=True)
 
     render_section_title(
