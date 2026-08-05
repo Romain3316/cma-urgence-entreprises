@@ -7,11 +7,26 @@ import html
 import re
 import unicodedata
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
 import pydeck as pdk
 import requests
 import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import (
+    Image,
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 
 # ============================================================
@@ -74,7 +89,7 @@ IMPORT_COLUMNS = [
     "Commentaire",
 ]
 
-# Vue générale Médoc / Bassin d'Arcachon
+# Vue générale Gironde : Médoc, Bassin d'Arcachon et Bordeaux Métropole
 DEFAULT_VIEW = {
     "latitude": 44.91,
     "longitude": -0.93,
@@ -103,6 +118,36 @@ THEME_HEX = {
 # ============================================================
 
 EPCI_COMMUNES: dict[str, list[str]] = {
+    "Bordeaux Métropole": [
+        "Ambarès-et-Lagrave",
+        "Ambès",
+        "Artigues-près-Bordeaux",
+        "Bassens",
+        "Bègles",
+        "Blanquefort",
+        "Bordeaux",
+        "Bouliac",
+        "Le Bouscat",
+        "Bruges",
+        "Carbon-Blanc",
+        "Cenon",
+        "Eysines",
+        "Floirac",
+        "Gradignan",
+        "Le Haillan",
+        "Lormont",
+        "Martignas-sur-Jalle",
+        "Mérignac",
+        "Parempuyre",
+        "Pessac",
+        "Saint-Aubin-de-Médoc",
+        "Saint-Louis-de-Montferrand",
+        "Saint-Médard-en-Jalles",
+        "Saint-Vincent-de-Paul",
+        "Talence",
+        "Le Taillan-Médoc",
+        "Villenave-d'Ornon",
+    ],
     "CC Médoc Atlantique": [
         "Carcans",
         "Grayan-et-l'Hôpital",
@@ -188,6 +233,7 @@ EPCI_COMMUNES: dict[str, list[str]] = {
 }
 
 EPCI_TO_GRAND_TERRITORY = {
+    "Bordeaux Métropole": "Bordeaux Métropole",
     "CC Médoc Atlantique": "Médoc",
     "CC Médoc Cœur de Presqu'île": "Médoc",
     "CC Médoc Estuaire": "Médoc",
@@ -956,130 +1002,164 @@ def enrich_dataframe(source_df: pd.DataFrame) -> pd.DataFrame:
 # ============================================================
 
 def render_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
+    """
+    Panneau de filtres compact :
+    - un onglet Territoire ;
+    - un onglet Suivi des appels ;
+    - un onglet Recherche et qualité.
+    Les sélecteurs utilisent une valeur unique avec l'option « Tous »,
+    ce qui évite l'accumulation de pastilles à l'écran.
+    """
     if df.empty:
         return df
 
-    st.markdown('<div class="soft-panel">', unsafe_allow_html=True)
-    render_section_title("Filtres", "Les indicateurs, graphiques et cartes se mettent à jour ensemble.")
-
-    date_series = pd.to_datetime(df["Date de l'appel"], errors="coerce")
-    valid_dates = date_series.dropna()
-
-    row1 = st.columns([1.2, 1.4, 1.4, 1.4], gap="medium")
-
-    with row1[0]:
-        if valid_dates.empty:
-            selected_period = None
-            st.date_input(
-                "Période d'appel",
-                value=(date.today(), date.today()),
-                disabled=True,
-                key=f"{key_prefix}_period_disabled",
+    with st.container(border=True):
+        header_col, count_col = st.columns([4, 1])
+        with header_col:
+            st.markdown("### Filtres du rapport")
+            st.caption(
+                "Choisissez un périmètre territorial, une période et un état de contact. "
+                "La carte, les indicateurs et le PDF utilisent exactement ces critères."
             )
-        else:
-            min_date = valid_dates.min().date()
-            max_date = valid_dates.max().date()
-            selected_period = st.date_input(
-                "Période d'appel",
-                value=(min_date, max_date),
-                min_value=min_date,
-                max_value=max_date,
-                key=f"{key_prefix}_period",
+        with count_col:
+            st.metric("Base active", len(df))
+
+        territory_tab, followup_tab, search_tab = st.tabs(
+            ["📍 Territoire", "☎️ Suivi des appels", "🔎 Recherche et qualité"]
+        )
+
+        date_series = pd.to_datetime(df["Date de l'appel"], errors="coerce")
+        valid_dates = date_series.dropna()
+
+        with territory_tab:
+            cols = st.columns([1.2, 1.2, 1.2, 1.35], gap="large")
+
+            grand_options = sorted(df["Grand territoire"].dropna().unique())
+            with cols[0]:
+                selected_grand = st.selectbox(
+                    "Grand territoire",
+                    ["Tous"] + grand_options,
+                    key=f"{key_prefix}_grand",
+                )
+
+            grand_source = (
+                df[df["Grand territoire"] == selected_grand]
+                if selected_grand != "Tous"
+                else df
             )
 
-    with row1[1]:
-        grand_options = sorted(df["Grand territoire"].dropna().unique())
-        selected_grand = st.multiselect(
-            "Grand territoire",
-            grand_options,
-            default=grand_options,
-            key=f"{key_prefix}_grand",
-        )
+            epci_options = sorted(grand_source["EPCI / CDC"].dropna().unique())
+            with cols[1]:
+                selected_epci = st.selectbox(
+                    "CDC / EPCI",
+                    ["Tous"] + epci_options,
+                    key=f"{key_prefix}_epci",
+                )
 
-    epci_source = df[df["Grand territoire"].isin(selected_grand)] if selected_grand else df
-    with row1[2]:
-        epci_options = sorted(epci_source["EPCI / CDC"].dropna().unique())
-        selected_epci = st.multiselect(
-            "CDC / EPCI",
-            epci_options,
-            default=epci_options,
-            key=f"{key_prefix}_epci",
-        )
+            epci_source = (
+                grand_source[grand_source["EPCI / CDC"] == selected_epci]
+                if selected_epci != "Tous"
+                else grand_source
+            )
 
-    commune_source = epci_source[epci_source["EPCI / CDC"].isin(selected_epci)] if selected_epci else epci_source
-    with row1[3]:
-        commune_options = sorted(commune_source["Commune"].dropna().unique())
-        selected_communes = st.multiselect(
-            "Commune",
-            commune_options,
-            default=commune_options,
-            key=f"{key_prefix}_commune",
-        )
+            commune_options = sorted(epci_source["Commune"].dropna().unique())
+            with cols[2]:
+                selected_commune = st.selectbox(
+                    "Commune",
+                    ["Toutes"] + commune_options,
+                    key=f"{key_prefix}_commune",
+                )
 
-    row2 = st.columns([1.35, 1.35, 1.35, 1.05, 1.55], gap="medium")
+            with cols[3]:
+                if valid_dates.empty:
+                    selected_period = None
+                    st.date_input(
+                        "Période d'appel",
+                        value=(date.today(), date.today()),
+                        disabled=True,
+                        key=f"{key_prefix}_period_disabled",
+                    )
+                else:
+                    min_date = valid_dates.min().date()
+                    max_date = valid_dates.max().date()
+                    selected_period = st.date_input(
+                        "Période d'appel",
+                        value=(min_date, max_date),
+                        min_value=min_date,
+                        max_value=max_date,
+                        key=f"{key_prefix}_period",
+                    )
 
-    with row2[0]:
-        contact_options = [
-            state for state in CONTACT_STATES
-            if state in set(df["État du contact"].dropna().unique())
-        ]
-        selected_contact_states = st.multiselect(
-            "État du contact",
-            contact_options,
-            default=contact_options,
-            key=f"{key_prefix}_contact_state",
-        )
+        with followup_tab:
+            cols = st.columns(3, gap="large")
 
-    with row2[1]:
-        theme_options = sorted(df["Thématique"].dropna().unique())
-        selected_themes = st.multiselect(
-            "Thématique du commentaire",
-            theme_options,
-            default=theme_options,
-            key=f"{key_prefix}_theme",
-        )
+            available_states = [
+                state
+                for state in CONTACT_STATES
+                if state in set(df["État du contact"].dropna().unique())
+            ]
+            with cols[0]:
+                selected_contact_state = st.selectbox(
+                    "État du contact",
+                    ["Tous"] + available_states,
+                    key=f"{key_prefix}_contact_state",
+                )
 
-    with row2[2]:
-        geo_options = sorted(df["Statut géocodage"].fillna("Non renseigné").unique())
-        selected_geo = st.multiselect(
-            "Qualité de géolocalisation",
-            geo_options,
-            default=geo_options,
-            key=f"{key_prefix}_geo",
-        )
+            theme_options = sorted(df["Thématique"].dropna().unique())
+            with cols[1]:
+                selected_theme = st.selectbox(
+                    "Thématique du commentaire",
+                    ["Toutes"] + theme_options,
+                    key=f"{key_prefix}_theme",
+                )
 
-    with row2[3]:
-        comments_only = st.checkbox(
-            "Avec commentaire uniquement",
-            value=False,
-            key=f"{key_prefix}_comments",
-        )
+            with cols[2]:
+                comments_only = st.toggle(
+                    "Uniquement les lignes avec commentaire",
+                    value=False,
+                    key=f"{key_prefix}_comments",
+                )
 
-    with row2[4]:
-        search = st.text_input(
-            "Rechercher une entreprise",
-            placeholder="Nom de l'entreprise…",
-            key=f"{key_prefix}_search",
-        )
+        with search_tab:
+            cols = st.columns([1.5, 1.2], gap="large")
+
+            with cols[0]:
+                search = st.text_input(
+                    "Rechercher une entreprise",
+                    placeholder="Saisir une partie du nom…",
+                    key=f"{key_prefix}_search",
+                )
+
+            geo_options = sorted(
+                df["Statut géocodage"].fillna("Non renseigné").unique()
+            )
+            with cols[1]:
+                selected_geo = st.selectbox(
+                    "Qualité de géolocalisation",
+                    ["Toutes"] + geo_options,
+                    key=f"{key_prefix}_geo",
+                )
 
     filtered = df.copy()
 
-    if selected_grand:
-        filtered = filtered[filtered["Grand territoire"].isin(selected_grand)]
-    if selected_epci:
-        filtered = filtered[filtered["EPCI / CDC"].isin(selected_epci)]
-    if selected_communes:
-        filtered = filtered[filtered["Commune"].isin(selected_communes)]
-    if selected_contact_states:
+    if selected_grand != "Tous":
+        filtered = filtered[filtered["Grand territoire"] == selected_grand]
+    if selected_epci != "Tous":
+        filtered = filtered[filtered["EPCI / CDC"] == selected_epci]
+    if selected_commune != "Toutes":
+        filtered = filtered[filtered["Commune"] == selected_commune]
+    if selected_contact_state != "Tous":
         filtered = filtered[
-            filtered["État du contact"].isin(selected_contact_states)
+            filtered["État du contact"] == selected_contact_state
         ]
-    if selected_themes:
-        filtered = filtered[filtered["Thématique"].isin(selected_themes)]
-    if selected_geo:
-        filtered = filtered[filtered["Statut géocodage"].isin(selected_geo)]
+    if selected_theme != "Toutes":
+        filtered = filtered[filtered["Thématique"] == selected_theme]
+    if selected_geo != "Toutes":
+        filtered = filtered[filtered["Statut géocodage"] == selected_geo]
     if comments_only:
-        filtered = filtered[filtered["Commentaire"].astype(str).str.strip().ne("")]
+        filtered = filtered[
+            filtered["Commentaire"].astype(str).str.strip().ne("")
+        ]
     if search:
         q = normalize_place(search)
         filtered = filtered[
@@ -1091,14 +1171,19 @@ def render_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
 
     if selected_period and isinstance(selected_period, tuple) and len(selected_period) == 2:
         start_date, end_date = selected_period
-        filtered_dates = pd.to_datetime(filtered["Date de l'appel"], errors="coerce")
+        filtered_dates = pd.to_datetime(
+            filtered["Date de l'appel"],
+            errors="coerce",
+        )
         mask = (
             filtered_dates.dt.date.ge(start_date)
             & filtered_dates.dt.date.le(end_date)
         )
         filtered = filtered[mask.fillna(False)]
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.caption(
+        f"**{len(filtered)} entreprise(s)** correspondent aux filtres sélectionnés."
+    )
     return filtered
 
 
@@ -1289,6 +1374,327 @@ def report_metrics(df: pd.DataFrame) -> dict[str, Any]:
         "first_date": dates.min().strftime("%d/%m/%Y") if not dates.dropna().empty else "Non renseignée",
         "last_date": dates.max().strftime("%d/%m/%Y") if not dates.dropna().empty else "Non renseignée",
     }
+
+
+def create_report_map_png(df: pd.DataFrame) -> bytes:
+    """
+    Produit une carte statique intégrable au PDF.
+    Elle utilise les coordonnées réellement géocodées et reprend les couleurs
+    des états de contact. La vue s'adapte automatiquement aux filtres.
+    """
+    valid = df.dropna(subset=["Latitude", "Longitude"]).copy()
+
+    fig, ax = plt.subplots(figsize=(11.2, 7.0), dpi=170)
+    ax.set_facecolor("#F2F4F7")
+    fig.patch.set_facecolor("white")
+
+    if valid.empty:
+        ax.text(
+            0.5,
+            0.5,
+            "Aucune entreprise géolocalisée pour les filtres sélectionnés",
+            ha="center",
+            va="center",
+            fontsize=14,
+            color="#667085",
+            transform=ax.transAxes,
+        )
+        ax.set_axis_off()
+    else:
+        for state in CONTACT_STATES:
+            subset = valid[valid["État du contact"] == state]
+            if subset.empty:
+                continue
+
+            color = CONTACT_STATE_HEX.get(state, "#667085")
+            ax.scatter(
+                subset["Longitude"],
+                subset["Latitude"],
+                s=48,
+                c=color,
+                edgecolors="white",
+                linewidths=0.8,
+                alpha=0.90,
+                label=state,
+                zorder=3,
+            )
+
+        # Position moyenne de chaque commune afin d'apporter un repère territorial.
+        commune_centers = (
+            valid.groupby("Commune")[["Longitude", "Latitude"]]
+            .mean()
+            .reset_index()
+        )
+        for _, row in commune_centers.iterrows():
+            ax.annotate(
+                str(row["Commune"]),
+                (row["Longitude"], row["Latitude"]),
+                xytext=(4, 5),
+                textcoords="offset points",
+                fontsize=7.5,
+                color="#344054",
+                zorder=4,
+            )
+
+        lon_min = float(valid["Longitude"].min())
+        lon_max = float(valid["Longitude"].max())
+        lat_min = float(valid["Latitude"].min())
+        lat_max = float(valid["Latitude"].max())
+
+        lon_margin = max((lon_max - lon_min) * 0.10, 0.015)
+        lat_margin = max((lat_max - lat_min) * 0.10, 0.015)
+
+        ax.set_xlim(lon_min - lon_margin, lon_max + lon_margin)
+        ax.set_ylim(lat_min - lat_margin, lat_max + lat_margin)
+        ax.grid(color="#D0D5DD", linewidth=0.55, alpha=0.7)
+        ax.tick_params(labelsize=7, colors="#667085")
+        ax.set_xlabel("Longitude", fontsize=8, color="#667085")
+        ax.set_ylabel("Latitude", fontsize=8, color="#667085")
+        ax.legend(
+            loc="best",
+            fontsize=7,
+            frameon=True,
+            facecolor="white",
+            edgecolor="#D0D5DD",
+        )
+
+    ax.set_title(
+        "Cartographie des entreprises appelées - périmètre filtré",
+        loc="left",
+        fontsize=15,
+        fontweight="bold",
+        color="#172033",
+        pad=14,
+    )
+
+    buffer = BytesIO()
+    fig.tight_layout()
+    fig.savefig(buffer, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def report_scope_text(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "Aucune donnée dans le périmètre sélectionné."
+
+    dates = pd.to_datetime(df["Date de l'appel"], errors="coerce").dropna()
+    period = (
+        f"du {dates.min().strftime('%d/%m/%Y')} au {dates.max().strftime('%d/%m/%Y')}"
+        if not dates.empty
+        else "période non renseignée"
+    )
+
+    epcis = sorted(df["EPCI / CDC"].dropna().unique())
+    communes = sorted(df["Commune"].dropna().unique())
+
+    epci_text = epcis[0] if len(epcis) == 1 else f"{len(epcis)} CDC / EPCI"
+    commune_text = (
+        communes[0] if len(communes) == 1 else f"{len(communes)} communes"
+    )
+
+    return f"Périmètre : {epci_text} - {commune_text} - période {period}."
+
+
+def create_pdf_report(df: pd.DataFrame) -> bytes:
+    """Génère un rapport PDF directement téléchargeable depuis Streamlit."""
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=1.25 * cm,
+        leftMargin=1.25 * cm,
+        topMargin=1.15 * cm,
+        bottomMargin=1.15 * cm,
+        title="Rapport cellule de crise CMA",
+        author="CMA Nouvelle-Aquitaine",
+    )
+
+    styles = getSampleStyleSheet()
+    styles.add(
+        ParagraphStyle(
+            name="ReportTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=22,
+            leading=26,
+            textColor=colors.HexColor("#172033"),
+            alignment=TA_CENTER,
+            spaceAfter=8,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="SectionTitleCMA",
+            parent=styles["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=13,
+            leading=16,
+            textColor=colors.HexColor(CMA_RED),
+            spaceBefore=10,
+            spaceAfter=7,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="SmallMuted",
+            parent=styles["BodyText"],
+            fontSize=8,
+            leading=10,
+            textColor=colors.HexColor("#667085"),
+        )
+    )
+
+    metrics = report_metrics(df)
+    state_counts = contact_state_counts(df)
+    progress_rate = contact_progress_rate(df)
+
+    story = [
+        Paragraph("Rapport de la cellule de crise", styles["ReportTitle"]),
+        Paragraph(
+            "Cartographie et bilan des entreprises appelées",
+            styles["Heading3"],
+        ),
+        Spacer(1, 0.15 * cm),
+        Paragraph(report_scope_text(df), styles["BodyText"]),
+        Paragraph(
+            f"Rapport généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}",
+            styles["SmallMuted"],
+        ),
+        Spacer(1, 0.35 * cm),
+    ]
+
+    metric_data = [
+        [
+            Paragraph("<b>Entreprises appelées</b>", styles["SmallMuted"]),
+            Paragraph("<b>Contactées</b>", styles["SmallMuted"]),
+            Paragraph("<b>Message vocal & mail</b>", styles["SmallMuted"]),
+            Paragraph("<b>Mauvais numéros</b>", styles["SmallMuted"]),
+            Paragraph("<b>Déjà contactées</b>", styles["SmallMuted"]),
+            Paragraph("<b>Avancement</b>", styles["SmallMuted"]),
+        ],
+        [
+            str(metrics["total"]),
+            str(state_counts["Entreprise contactée"]),
+            str(state_counts["Message vocal & mail envoyé"]),
+            str(state_counts["Mauvais numéro"]),
+            str(state_counts["Déjà contactée"]),
+            f"{progress_rate} %",
+        ],
+    ]
+
+    metric_table = Table(
+        metric_data,
+        colWidths=[4.2 * cm] * 6,
+        rowHeights=[0.8 * cm, 1.15 * cm],
+    )
+    metric_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F2F4F7")),
+                ("BACKGROUND", (0, 1), (-1, 1), colors.white),
+                ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#D0D5DD")),
+                ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E4E7EC")),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 1), (-1, 1), 17),
+                ("TEXTCOLOR", (0, 1), (-1, 1), colors.HexColor("#172033")),
+            ]
+        )
+    )
+    story.extend([metric_table, Spacer(1, 0.35 * cm)])
+
+    # Carte filtrée intégrée dans le PDF.
+    map_bytes = create_report_map_png(df)
+    map_buffer = BytesIO(map_bytes)
+    story.append(Image(map_buffer, width=25.2 * cm, height=14.9 * cm))
+    story.append(PageBreak())
+
+    story.append(Paragraph("Répartition des appels", styles["SectionTitleCMA"]))
+
+    def summary_table(
+        source: pd.DataFrame,
+        group_column: str,
+        title: str,
+        max_rows: int = 16,
+    ) -> Table:
+        if source.empty:
+            data = [[title, "Nombre"], ["Aucune donnée", "0"]]
+        else:
+            grouped = (
+                source.groupby(group_column)
+                .size()
+                .sort_values(ascending=False)
+                .head(max_rows)
+            )
+            data = [[title, "Nombre"]] + [
+                [str(label), str(int(value))]
+                for label, value in grouped.items()
+            ]
+
+        table = Table(data, colWidths=[8.4 * cm, 2.2 * cm], repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#172033")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#D0D5DD")),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F9FAFB")),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("ALIGN", (1, 1), (1, -1), "CENTER"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        return table
+
+    tables = Table(
+        [
+            [
+                summary_table(df, "État du contact", "État du contact"),
+                summary_table(df, "EPCI / CDC", "CDC / EPCI"),
+            ],
+            [
+                summary_table(df, "Commune", "Communes"),
+                summary_table(df, "Thématique", "Thématiques"),
+            ],
+        ],
+        colWidths=[12.5 * cm, 12.5 * cm],
+        hAlign="CENTER",
+    )
+    tables.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    story.append(tables)
+    story.append(Spacer(1, 0.3 * cm))
+    story.append(
+        Paragraph(
+            "Précaution RGPD : le rapport reprend uniquement les informations "
+            "présentes dans le fichier importé et les critères actuellement sélectionnés.",
+            styles["SmallMuted"],
+        )
+    )
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
 
 
 def create_html_report(df: pd.DataFrame) -> bytes:
@@ -1871,7 +2277,7 @@ def page_report() -> None:
 
     render_section_title(
         "Exports du rapport",
-        "Le rapport HTML peut être ouvert dans un navigateur puis imprimé en PDF.",
+        "Le PDF reprend automatiquement les critères actifs et la cartographie filtrée.",
     )
 
     export_cols = st.columns(2)
@@ -1885,11 +2291,12 @@ def page_report() -> None:
         )
     with export_cols[1]:
         st.download_button(
-            "Télécharger le rapport imprimable",
-            data=create_html_report(filtered),
-            file_name="rapport_cellule_crise.html",
-            mime="text/html",
+            "Générer et télécharger le rapport PDF",
+            data=create_pdf_report(filtered),
+            file_name="rapport_cellule_crise.pdf",
+            mime="application/pdf",
             use_container_width=True,
+            type="primary",
         )
 
     render_footer()
