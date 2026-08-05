@@ -3061,24 +3061,24 @@ def page_report() -> None:
         )
     with export_cols[1]:
         if st.button(
-            "Préparer le rapport V10",
+            "Préparer le rapport PDF",
             type="primary",
             use_container_width=True,
             key="prepare_pdf_report",
         ):
-            with st.spinner("Génération du rapport V10…"):
+            with st.spinner("Génération du rapport PDF…"):
                 try:
-                    st.session_state.generated_pdf_report = create_v8_pdf_report(filtered)
-                    st.success("Le rapport V10 est prêt.")
+                    st.session_state.generated_pdf_report = create_pdf_report(filtered)
+                    st.success("Le rapport PDF est prêt.")
                 except Exception as exc:
                     st.session_state.generated_pdf_report = None
                     st.error(f"Impossible de générer le rapport : {exc}")
 
         if st.session_state.get("generated_pdf_report"):
             st.download_button(
-                "Télécharger le rapport PDF V10",
+                "Télécharger le rapport PDF",
                 data=st.session_state.generated_pdf_report,
-                file_name="rapport_cellule_crise_v10.pdf",
+                file_name="rapport_cellule_crise.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key="download_generated_pdf",
