@@ -1809,96 +1809,175 @@ def report_scope_text(df: pd.DataFrame) -> str:
     return f"Périmètre : {epci_text} - {commune_text} - période {period}."
 
 
+def generate_report_remarks(df: pd.DataFrame) -> list[str]:
+    """Génère des remarques factuelles à partir du périmètre filtré."""
+    if df.empty:
+        return ["Aucune entreprise ne correspond aux critères sélectionnés."]
+
+    remarks: list[str] = []
+    total = len(df)
+    state_counts = contact_state_counts(df)
+    progress = contact_progress_rate(df)
+
+    contacted = state_counts.get("Entreprise contactée", 0)
+    vocal_mail = state_counts.get("Message vocal & mail envoyé", 0)
+    wrong_numbers = state_counts.get("Mauvais numéro", 0)
+    already_contacted = state_counts.get("Déjà contactée", 0)
+
+    contacted_rate = round(contacted / total * 100, 1) if total else 0
+    follow_up_rate = round(vocal_mail / total * 100, 1) if total else 0
+
+    remarks.append(
+        f"La campagne porte sur {total} entreprise(s), avec un taux d'avancement "
+        f"estimé à {progress} %."
+    )
+    remarks.append(
+        f"{contacted} entreprise(s) ont été directement contactée(s), "
+        f"soit {contacted_rate} % du périmètre."
+    )
+
+    if vocal_mail:
+        remarks.append(
+            f"{vocal_mail} entreprise(s) ont reçu un message vocal et un courriel "
+            f"({follow_up_rate} %) ; ces situations constituent le principal volume "
+            "de suivi potentiel."
+        )
+
+    if wrong_numbers:
+        remarks.append(
+            f"{wrong_numbers} numéro(s) sont identifié(s) comme erroné(s) et "
+            "nécessitent, lorsque cela est possible, une mise à jour des coordonnées."
+        )
+
+    if already_contacted:
+        remarks.append(
+            f"{already_contacted} entreprise(s) avaient déjà été contactée(s) "
+            "par un autre interlocuteur."
+        )
+
+    if "EPCI / CDC" in df.columns and not df["EPCI / CDC"].dropna().empty:
+        epci_counts = df["EPCI / CDC"].value_counts()
+        top_epci = str(epci_counts.index[0])
+        top_epci_count = int(epci_counts.iloc[0])
+        remarks.append(
+            f"Le territoire le plus représenté est {top_epci}, avec "
+            f"{top_epci_count} entreprise(s)."
+        )
+
+    if "Commune" in df.columns and not df["Commune"].dropna().empty:
+        commune_counts = df["Commune"].value_counts()
+        top_commune = str(commune_counts.index[0])
+        top_commune_count = int(commune_counts.iloc[0])
+        remarks.append(
+            f"La commune concentrant le plus d'appels est {top_commune} "
+            f"({top_commune_count} entreprise(s))."
+        )
+
+    if "Thématique" in df.columns and not df["Thématique"].dropna().empty:
+        theme_counts = df["Thématique"].value_counts()
+        top_theme = str(theme_counts.index[0])
+        top_theme_count = int(theme_counts.iloc[0])
+        remarks.append(
+            f"La thématique la plus fréquente dans les commentaires est "
+            f"« {top_theme} » ({top_theme_count} occurrence(s))."
+        )
+
+    dates = pd.to_datetime(df["Date de l'appel"], errors="coerce").dropna()
+    if not dates.empty and dates.dt.date.nunique() > 1:
+        daily_counts = dates.dt.date.value_counts()
+        busiest_day = pd.Timestamp(daily_counts.index[0]).strftime("%d/%m/%Y")
+        busiest_count = int(daily_counts.iloc[0])
+        remarks.append(
+            f"Le pic d'activité a été enregistré le {busiest_day}, "
+            f"avec {busiest_count} appel(s)."
+        )
+
+    return remarks[:8]
+
+
+
 def create_pdf_report(df: pd.DataFrame) -> bytes:
-    """Génère un rapport PDF directement téléchargeable depuis Streamlit."""
+    """Génère un rapport CMA en format A4 portrait, dense et institutionnel."""
     buffer = BytesIO()
 
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=landscape(A4),
-        rightMargin=1.25 * cm,
-        leftMargin=1.25 * cm,
-        topMargin=1.15 * cm,
-        bottomMargin=1.15 * cm,
+        pagesize=A4,
+        rightMargin=1.15 * cm,
+        leftMargin=1.15 * cm,
+        topMargin=0.9 * cm,
+        bottomMargin=0.9 * cm,
         title="Rapport cellule de crise CMA",
         author="CMA Nouvelle-Aquitaine",
     )
 
+    page_width, page_height = A4
+    usable_width = page_width - doc.leftMargin - doc.rightMargin
+
     styles = getSampleStyleSheet()
-    styles.add(
-        ParagraphStyle(
-            name="ReportTitle",
-            parent=styles["Title"],
-            fontName="Helvetica-Bold",
-            fontSize=22,
-            leading=26,
-            textColor=colors.HexColor("#172033"),
-            alignment=TA_CENTER,
-            spaceAfter=8,
-        )
-    )
     styles.add(
         ParagraphStyle(
             name="SectionTitleCMA",
             parent=styles["Heading2"],
             fontName="Helvetica-Bold",
-            fontSize=13,
-            leading=16,
+            fontSize=12,
+            leading=14,
             textColor=colors.HexColor("#173A63"),
-            backColor=colors.HexColor("#F2F4F7"),
+            backColor=colors.HexColor("#EEF2F7"),
             borderColor=colors.HexColor(CMA_RED),
             borderWidth=0,
             borderPadding=(6, 8, 6, 8),
-            leftIndent=0,
-            spaceBefore=10,
-            spaceAfter=7,
+            spaceBefore=6,
+            spaceAfter=6,
         )
     )
     styles.add(
         ParagraphStyle(
             name="SmallMuted",
             parent=styles["BodyText"],
-            fontSize=8,
-            leading=10,
+            fontSize=7.5,
+            leading=9,
             textColor=colors.HexColor("#667085"),
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            name="RemarkText",
+            parent=styles["BodyText"],
+            fontSize=9,
+            leading=12,
+            textColor=colors.HexColor("#173A63"),
+            leftIndent=8,
+            bulletIndent=0,
+            spaceAfter=4,
         )
     )
 
     metrics = report_metrics(df)
     state_counts = contact_state_counts(df)
     progress_rate = contact_progress_rate(df)
+    remarks = generate_report_remarks(df)
 
     story = []
 
-    # ------------------------------------------------------------------
-    # PAGE DE GARDE — STYLE CMA RÉFLEXE
-    # Construite uniquement avec des Flowables Platypus afin d'éviter
-    # les erreurs de mise en page liées à un Drawing plus grand que le frame.
-    # ------------------------------------------------------------------
-    available_width = 27.2 * cm
-
+    # ===============================================================
+    # PAGE 1 - COUVERTURE PORTRAIT
+    # ===============================================================
     try:
         logo_bytes = base64.b64decode(CMA_LOGO_BASE64)
         logo_image = Image(BytesIO(logo_bytes))
-        logo_image.drawWidth = 7.0 * cm
-        logo_image.drawHeight = 2.45 * cm
+        logo_image.drawWidth = 6.1 * cm
+        logo_image.drawHeight = 2.15 * cm
     except Exception:
         logo_image = Paragraph(
             "<b>CMA Nouvelle-Aquitaine</b>",
-            ParagraphStyle(
-                name="LogoFallback",
-                parent=styles["BodyText"],
-                fontName="Helvetica-Bold",
-                fontSize=14,
-                textColor=colors.HexColor(CMA_RED),
-                alignment=TA_CENTER,
-            ),
+            styles["Heading2"],
         )
 
     top_strip = Table(
         [[""]],
-        colWidths=[available_width],
-        rowHeights=[0.55 * cm],
+        colWidths=[usable_width],
+        rowHeights=[0.45 * cm],
         style=TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#E31B23")),
@@ -1910,43 +1989,39 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
     institution = Paragraph(
         "<b>CMA NOUVELLE-AQUITAINE · GIRONDE</b>",
         ParagraphStyle(
-            name="CoverInstitution",
+            name="CoverInstitutionPortrait",
             parent=styles["BodyText"],
             fontName="Helvetica-Bold",
-            fontSize=12,
-            leading=14,
+            fontSize=10,
+            leading=12,
             textColor=colors.white,
         ),
     )
 
     logo_box = Table(
         [[logo_image]],
-        colWidths=[8.1 * cm],
-        rowHeights=[3.1 * cm],
+        colWidths=[6.8 * cm],
+        rowHeights=[2.65 * cm],
         style=TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-                ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#D0D5DD")),
+                ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#D0D5DD")),
                 ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ]
         ),
     )
 
     header_row = Table(
         [[institution, logo_box]],
-        colWidths=[17.8 * cm, 8.2 * cm],
-        rowHeights=[3.4 * cm],
+        colWidths=[10.5 * cm, 6.9 * cm],
+        rowHeights=[2.8 * cm],
         style=TableStyle(
             [
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("ALIGN", (1, 0), (1, 0), "RIGHT"),
                 ("LEFTPADDING", (0, 0), (0, 0), 0),
-                ("RIGHTPADDING", (0, 0), (0, 0), 8),
+                ("RIGHTPADDING", (0, 0), (0, 0), 5),
                 ("LEFTPADDING", (1, 0), (1, 0), 0),
                 ("RIGHTPADDING", (1, 0), (1, 0), 0),
             ]
@@ -1957,11 +2032,11 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
         Paragraph(
             "Rapport cellule de crise",
             ParagraphStyle(
-                name="CoverMainTitle",
+                name="CoverMainTitlePortrait",
                 parent=styles["Title"],
                 fontName="Helvetica-Bold",
-                fontSize=26,
-                leading=30,
+                fontSize=25,
+                leading=29,
                 textColor=colors.white,
                 spaceAfter=4,
             ),
@@ -1969,23 +2044,23 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
         Paragraph(
             "Entreprises appelées",
             ParagraphStyle(
-                name="CoverRedTitle",
+                name="CoverRedTitlePortrait",
                 parent=styles["Title"],
                 fontName="Helvetica-Bold",
-                fontSize=23,
-                leading=27,
+                fontSize=22,
+                leading=26,
                 textColor=colors.HexColor("#FF3038"),
-                spaceAfter=8,
+                spaceAfter=10,
             ),
         ),
         Paragraph(
             "Cartographie, suivi territorial et analyse des appels",
             ParagraphStyle(
-                name="CoverTagline",
+                name="CoverTaglinePortrait",
                 parent=styles["BodyText"],
                 fontName="Helvetica",
-                fontSize=12.5,
-                leading=16,
+                fontSize=11.5,
+                leading=15,
                 textColor=colors.white,
             ),
         ),
@@ -1997,10 +2072,10 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
                 Paragraph(
                     "<b>PÉRIMÈTRE DU RAPPORT</b>",
                     ParagraphStyle(
-                        name="ScopeTitle",
+                        name="ScopeTitlePortrait",
                         parent=styles["BodyText"],
                         fontName="Helvetica-Bold",
-                        fontSize=10.5,
+                        fontSize=9.5,
                         textColor=colors.white,
                     ),
                 )
@@ -2009,38 +2084,38 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
                 Paragraph(
                     report_scope_text(df),
                     ParagraphStyle(
-                        name="ScopeText",
+                        name="ScopeTextPortrait",
                         parent=styles["BodyText"],
                         fontName="Helvetica",
-                        fontSize=9.5,
-                        leading=13,
+                        fontSize=8.7,
+                        leading=12,
                         textColor=colors.white,
                     ),
                 )
             ],
             [
                 Paragraph(
-                    f"Date de l’export : {datetime.now().strftime('%d/%m/%Y à %H:%M')}",
+                    f"Date de l'export : {datetime.now().strftime('%d/%m/%Y à %H:%M')}",
                     ParagraphStyle(
-                        name="ExportDateCover",
+                        name="ExportDatePortrait",
                         parent=styles["BodyText"],
                         fontName="Helvetica",
-                        fontSize=9.5,
+                        fontSize=8.7,
                         textColor=colors.white,
                     ),
                 )
             ],
         ],
-        colWidths=[24.7 * cm],
-        rowHeights=[0.65 * cm, 1.2 * cm, 0.65 * cm],
+        colWidths=[15.5 * cm],
+        rowHeights=[0.6 * cm, 1.15 * cm, 0.6 * cm],
         style=TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#2C527E")),
                 ("BOX", (0, 0), (-1, -1), 0, colors.HexColor("#2C527E")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 14),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 14),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ]
         ),
@@ -2049,131 +2124,239 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
     cover_body = Table(
         [
             [header_row],
-            [Spacer(1, 0.35 * cm)],
-            [title_block],
             [Spacer(1, 0.55 * cm)],
+            [title_block],
+            [Spacer(1, 0.9 * cm)],
             [scope_box],
         ],
-        colWidths=[available_width],
+        colWidths=[usable_width],
         rowHeights=[
-            3.4 * cm,
-            0.35 * cm,
-            5.0 * cm,
+            2.8 * cm,
             0.55 * cm,
-            3.2 * cm,
+            5.1 * cm,
+            0.9 * cm,
+            3.05 * cm,
         ],
         style=TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#173A63")),
                 ("BOX", (0, 0), (-1, -1), 0, colors.HexColor("#173A63")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 1.6 * cm),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 1.6 * cm),
-                ("TOPPADDING", (0, 0), (-1, -1), 0.25 * cm),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 0.25 * cm),
+                ("LEFTPADDING", (0, 0), (-1, -1), 1.2 * cm),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 1.2 * cm),
+                ("TOPPADDING", (0, 0), (-1, -1), 0.2 * cm),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0.2 * cm),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ]
         ),
     )
 
-    story.extend(
-        [
-            top_strip,
-            cover_body,
-            PageBreak(),
-        ]
+    story.extend([top_strip, cover_body, PageBreak()])
+
+    # ===============================================================
+    # PAGE 2 - SYNTHÈSE + REMARQUES
+    # ===============================================================
+    story.append(
+        Table(
+            [["SYNTHÈSE DE LA CAMPAGNE D'APPELS"]],
+            colWidths=[usable_width],
+            rowHeights=[0.85 * cm],
+            style=TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#173A63")),
+                    ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
+                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 12),
+                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ]
+            ),
+        )
     )
+    story.append(Spacer(1, 0.25 * cm))
 
-
-    metric_data = [
-        [
-            Paragraph("<b>Entreprises appelées</b>", styles["SmallMuted"]),
-            Paragraph("<b>Contactées</b>", styles["SmallMuted"]),
-            Paragraph("<b>Message vocal & mail</b>", styles["SmallMuted"]),
-            Paragraph("<b>Mauvais numéros</b>", styles["SmallMuted"]),
-            Paragraph("<b>Déjà contactées</b>", styles["SmallMuted"]),
-            Paragraph("<b>Avancement</b>", styles["SmallMuted"]),
-        ],
-        [
-            str(metrics["total"]),
-            str(state_counts["Entreprise contactée"]),
-            str(state_counts["Message vocal & mail envoyé"]),
-            str(state_counts["Mauvais numéro"]),
-            str(state_counts["Déjà contactée"]),
-            f"{progress_rate} %",
-        ],
+    metric_cells = [
+        ("Entreprises appelées", metrics["total"]),
+        ("Contactées", state_counts["Entreprise contactée"]),
+        ("Message vocal & mail", state_counts["Message vocal & mail envoyé"]),
+        ("Mauvais numéros", state_counts["Mauvais numéro"]),
+        ("Déjà contactées", state_counts["Déjà contactée"]),
+        ("Avancement", f"{progress_rate} %"),
     ]
 
-    metric_table = Table(
-        metric_data,
-        colWidths=[4.2 * cm] * 6,
-        rowHeights=[0.8 * cm, 1.15 * cm],
-    )
-    metric_table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2C527E")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#F7F9FC")),
-                ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#D0D5DD")),
-                ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E4E7EC")),
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 1), (-1, 1), 17),
-                ("TEXTCOLOR", (0, 1), (-1, 1), colors.HexColor("#172033")),
-            ]
-        )
-    )
-    story.extend([metric_table, Spacer(1, 0.35 * cm)])
+    metric_rows = []
+    for row_start in (0, 3):
+        row = []
+        for label, value in metric_cells[row_start:row_start + 3]:
+            row.append(
+                Table(
+                    [
+                        [
+                            Paragraph(
+                                f"<b>{label}</b>",
+                                ParagraphStyle(
+                                    name=f"MetricLabel{row_start}{label}",
+                                    parent=styles["BodyText"],
+                                    fontName="Helvetica-Bold",
+                                    fontSize=8,
+                                    leading=10,
+                                    textColor=colors.white,
+                                    alignment=TA_CENTER,
+                                ),
+                            )
+                        ],
+                        [
+                            Paragraph(
+                                f"<b>{value}</b>",
+                                ParagraphStyle(
+                                    name=f"MetricValue{row_start}{label}",
+                                    parent=styles["BodyText"],
+                                    fontName="Helvetica-Bold",
+                                    fontSize=19,
+                                    leading=22,
+                                    textColor=colors.HexColor("#173A63"),
+                                    alignment=TA_CENTER,
+                                ),
+                            )
+                        ],
+                    ],
+                    colWidths=[5.65 * cm],
+                    rowHeights=[0.75 * cm, 1.15 * cm],
+                    style=TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2C527E")),
+                            ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#F5F7FA")),
+                            ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#D0D5DD")),
+                            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ]
+                    ),
+                )
+            )
+        metric_rows.append(row)
 
-    story.append(
-        Paragraph(
-            "Cartographie du périmètre filtré",
-            styles["SectionTitleCMA"],
-        )
+    metric_grid = Table(
+        metric_rows,
+        colWidths=[5.8 * cm, 5.8 * cm, 5.8 * cm],
+        rowHeights=[2.05 * cm, 2.05 * cm],
+        style=TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        ),
     )
+    story.append(metric_grid)
+    story.append(Spacer(1, 0.3 * cm))
+
+    story.append(Paragraph("Remarques principales", styles["SectionTitleCMA"]))
+    remarks_box_content = [
+        Paragraph(f"• {remark}", styles["RemarkText"])
+        for remark in remarks
+    ]
+    remarks_box = Table(
+        [[remarks_box_content]],
+        colWidths=[usable_width],
+        style=TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EDF3FA")),
+                ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#B8CCE2")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 10),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ]
+        ),
+    )
+    story.append(remarks_box)
+    story.append(Spacer(1, 0.25 * cm))
     story.append(
         Paragraph(
             report_scope_text(df),
             styles["SmallMuted"],
         )
     )
-    story.append(Spacer(1, 0.2 * cm))
+    story.append(PageBreak())
+
+    # ===============================================================
+    # PAGE 3 - GRANDE CARTE
+    # ===============================================================
+    story.append(Paragraph("Cartographie du périmètre filtré", styles["SectionTitleCMA"]))
+    story.append(Spacer(1, 0.1 * cm))
 
     map_bytes, excluded_points = create_osm_report_map(df)
     if map_bytes is not None:
         map_image = Image(BytesIO(map_bytes))
-        map_image.drawWidth = 25.2 * cm
-        map_image.drawHeight = 15.1 * cm
+        map_image.drawWidth = 18.1 * cm
+        map_image.drawHeight = 10.85 * cm
         map_image.hAlign = "CENTER"
         story.append(map_image)
     else:
-        story.append(create_fallback_report_map(df))
+        fallback = create_fallback_report_map(df)
+        fallback.width = 18.1 * cm
+        fallback.height = 10.85 * cm
+        story.append(fallback)
 
-    if excluded_points:
-        story.append(Spacer(1, 0.12 * cm))
-        story.append(
-            Paragraph(
-                f"{excluded_points} point(s) géographiques aberrant(s) ou hors emprise "
-                "ont été exclus du cadrage de la carte.",
-                styles["SmallMuted"],
-            )
-        )
-
+    story.append(Spacer(1, 0.2 * cm))
     story.append(
         Paragraph(
             "Fond cartographique © contributeurs OpenStreetMap.",
             styles["SmallMuted"],
         )
     )
+    if excluded_points:
+        story.append(
+            Paragraph(
+                f"{excluded_points} point(s) aberrant(s) ou hors emprise ont été "
+                "exclus du cadrage de la carte.",
+                styles["SmallMuted"],
+            )
+        )
+
+    # Légende compacte
+    legend_cells = []
+    present_states = [
+        state
+        for state in CONTACT_STATES
+        if state in set(df["État du contact"].dropna().unique())
+    ]
+    for state in present_states:
+        legend_cells.append(
+            Paragraph(
+                f'<font color="{CONTACT_STATE_HEX.get(state, "#667085")}">●</font> {state}',
+                ParagraphStyle(
+                    name=f"Legend{state}",
+                    parent=styles["BodyText"],
+                    fontSize=7.3,
+                    leading=9,
+                    textColor=colors.HexColor("#344054"),
+                ),
+            )
+        )
+    if legend_cells:
+        legend_table = Table(
+            [legend_cells],
+            colWidths=[usable_width / len(legend_cells)] * len(legend_cells),
+            style=TableStyle(
+                [
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            ),
+        )
+        story.append(legend_table)
+
     story.append(PageBreak())
 
-    story.append(
-        Paragraph(
-            "Analyse statistique",
-            styles["SectionTitleCMA"],
-        )
-    )
+    # ===============================================================
+    # PAGE 4 - ANALYSE TERRITORIALE
+    # ===============================================================
+    story.append(Paragraph("Analyse territoriale", styles["SectionTitleCMA"]))
 
     epci_series = (
         df.groupby("EPCI / CDC").size()
@@ -2185,6 +2368,33 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
         if not df.empty
         else pd.Series(dtype=int)
     )
+
+    story.append(
+        create_horizontal_bar_chart(
+            epci_series,
+            "Répartition par CDC / EPCI",
+            width=18.1 * cm,
+            height=8.2 * cm,
+            max_items=10,
+        )
+    )
+    story.append(Spacer(1, 0.25 * cm))
+    story.append(
+        create_horizontal_bar_chart(
+            commune_series,
+            "Principales communes",
+            width=18.1 * cm,
+            height=8.2 * cm,
+            max_items=10,
+        )
+    )
+    story.append(PageBreak())
+
+    # ===============================================================
+    # PAGE 5 - ANALYSE DES APPELS
+    # ===============================================================
+    story.append(Paragraph("Analyse des appels", styles["SectionTitleCMA"]))
+
     contact_series = (
         df.groupby("État du contact").size()
         if not df.empty
@@ -2196,61 +2406,45 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
         else pd.Series(dtype=int)
     )
 
-    charts_table = Table(
-        [
-            [
-                create_horizontal_bar_chart(
-                    contact_series,
-                    "État des contacts",
-                ),
-                create_horizontal_bar_chart(
-                    epci_series,
-                    "Répartition par CDC / EPCI",
-                ),
-            ],
-            [
-                create_horizontal_bar_chart(
-                    commune_series,
-                    "Principales communes",
-                ),
-                create_horizontal_bar_chart(
-                    theme_series,
-                    "Thématiques des commentaires",
-                ),
-            ],
-        ],
-        colWidths=[12.5 * cm, 12.5 * cm],
-        hAlign="CENTER",
-    )
-    charts_table.setStyle(
-        TableStyle(
-            [
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
+    story.append(
+        create_horizontal_bar_chart(
+            contact_series,
+            "État des contacts",
+            width=18.1 * cm,
+            height=6.8 * cm,
+            max_items=8,
         )
     )
-    story.append(charts_table)
-    story.append(PageBreak())
-    story.append(create_daily_calls_chart(df))
-    story.append(Spacer(1, 0.35 * cm))
+    story.append(Spacer(1, 0.25 * cm))
+    story.append(
+        create_horizontal_bar_chart(
+            theme_series,
+            "Thématiques des commentaires",
+            width=18.1 * cm,
+            height=6.8 * cm,
+            max_items=8,
+        )
+    )
+    story.append(Spacer(1, 0.25 * cm))
+    story.append(
+        create_daily_calls_chart(
+            df,
+            width=18.1 * cm,
+            height=5.8 * cm,
+        )
+    )
+    story.append(Spacer(1, 0.2 * cm))
     story.append(
         Paragraph(
             "Précaution RGPD : le rapport reprend uniquement les informations "
-            "présentes dans le fichier importé et les critères actuellement sélectionnés.",
+            "présentes dans le fichier importé et les critères sélectionnés.",
             styles["SmallMuted"],
         )
     )
 
-
-
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
-
 
 
 def create_html_report(df: pd.DataFrame) -> bytes:
