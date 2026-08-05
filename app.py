@@ -2382,7 +2382,7 @@ def _draw_header(
         draw,
         (65, 76),
         title.upper(),
-        28,
+        34,
         "white",
         bold=True,
     )
@@ -2395,7 +2395,7 @@ def _draw_footer(
 ) -> None:
     y = V8_PAGE_SIZE[1] - 50
     draw.line((60, y - 12, V8_PAGE_SIZE[0] - 60, y - 12), fill="#CBD5E1", width=2)
-    _draw_text(draw, (60, y), text, 16, V8_MUTED)
+    _draw_text(draw, (60, y), text, 20, V8_MUTED)
 
 
 def _draw_kpi_card(
@@ -2412,9 +2412,9 @@ def _draw_kpi_card(
         radius=20,
         fill=V8_RED,
     )
-    _draw_text(draw, (x1 + 24, y1 + 34), label, 20, V8_MUTED, bold=True)
-    _draw_text(draw, (x1 + 24, y1 + 84), value, 42, V8_TEXT, bold=True)
-    _draw_text(draw, (x1 + 24, y2 - 42), detail, 16, "#98A2B3")
+    _draw_text(draw, (x1 + 24, y1 + 34), label, 26, V8_MUTED, bold=True)
+    _draw_text(draw, (x1 + 24, y1 + 88), value, 52, V8_TEXT, bold=True)
+    _draw_text(draw, (x1 + 24, y2 - 44), detail, 21, "#98A2B3")
 
 
 def _draw_bar_chart(
@@ -2429,7 +2429,7 @@ def _draw_bar_chart(
     draw.rounded_rectangle((x1, y1, x2, y1 + 72), radius=20, fill=V8_NAVY)
     draw.rectangle((x1, y1 + 45, x2, y1 + 72), fill=V8_NAVY)
     draw.rectangle((x1, y1, x1 + 10, y1 + 72), fill=V8_RED)
-    _draw_text(draw, (x1 + 28, y1 + 21), title, 22, "white", bold=True)
+    _draw_text(draw, (x1 + 28, y1 + 18), title, 28, "white", bold=True)
 
     clean = series.dropna().sort_values(ascending=False).head(max_items)
     if clean.empty:
@@ -2437,7 +2437,7 @@ def _draw_bar_chart(
             draw,
             ((x1 + x2) // 2, (y1 + y2) // 2),
             "Aucune donnée",
-            20,
+            26,
             V8_MUTED,
             anchor="mm",
         )
@@ -2455,7 +2455,7 @@ def _draw_bar_chart(
         label_text = str(label)
         if len(label_text) > 28:
             label_text = label_text[:27] + "…"
-        _draw_text(draw, (x1 + 22, cy + 10), label_text, 16, "#344054")
+        _draw_text(draw, (x1 + 22, cy + 8), label_text, 21, "#344054")
         draw.rounded_rectangle(
             (bar_x, cy + 15, bar_x + bar_max_w, cy + 31),
             radius=8,
@@ -2467,7 +2467,7 @@ def _draw_bar_chart(
             radius=8,
             fill=V8_RED,
         )
-        _draw_text(draw, (bar_x + bar_max_w + 12, cy + 8), int(value), 16, V8_TEXT, bold=True)
+        _draw_text(draw, (bar_x + bar_max_w + 12, cy + 6), int(value), 21, V8_TEXT, bold=True)
 
 
 def _draw_timeline(
@@ -2480,7 +2480,7 @@ def _draw_timeline(
     draw.rounded_rectangle((x1, y1, x2, y1 + 72), radius=20, fill=V8_NAVY)
     draw.rectangle((x1, y1 + 45, x2, y1 + 72), fill=V8_NAVY)
     draw.rectangle((x1, y1, x1 + 10, y1 + 72), fill=V8_RED)
-    _draw_text(draw, (x1 + 28, y1 + 21), "Évolution quotidienne des appels", 22, "white", bold=True)
+    _draw_text(draw, (x1 + 28, y1 + 18), "Évolution quotidienne des appels", 28, "white", bold=True)
 
     dates = pd.to_datetime(df["Date de l'appel"], errors="coerce").dropna()
     if dates.empty:
@@ -2488,7 +2488,7 @@ def _draw_timeline(
             draw,
             ((x1 + x2) // 2, (y1 + y2) // 2),
             "Aucune date exploitable",
-            20,
+            26,
             V8_MUTED,
             anchor="mm",
         )
@@ -2518,7 +2518,7 @@ def _draw_timeline(
             draw,
             (bx + bw // 2, chart_bottom - bh - 22),
             int(value),
-            14,
+            19,
             V8_TEXT,
             bold=True,
             anchor="mm",
@@ -2528,7 +2528,7 @@ def _draw_timeline(
                 draw,
                 (bx + bw // 2, chart_bottom + 24),
                 pd.Timestamp(day).strftime("%d/%m"),
-                12,
+                16,
                 V8_MUTED,
                 anchor="mm",
             )
@@ -2551,16 +2551,16 @@ def create_v8_report_pages(df: pd.DataFrame) -> list[PILImage.Image]:
     # PAGE 1 — COUVERTURE
     page, draw = _new_page(V8_NAVY)
     draw.rectangle((0, 0, V8_PAGE_SIZE[0], 20), fill=V8_RED)
-    _draw_text(draw, (70, 95), "CMA NOUVELLE-AQUITAINE · GIRONDE", 24, "white", bold=True)
+    _draw_text(draw, (70, 95), "CMA NOUVELLE-AQUITAINE · GIRONDE", 30, "white", bold=True)
     _paste_logo(page, draw, 790, 50, width=350)
 
-    _draw_text(draw, (70, 430), "Rapport cellule de crise", 58, "white", bold=True)
-    _draw_text(draw, (70, 505), "Entreprises appelées", 52, "#FF3038", bold=True)
+    _draw_text(draw, (70, 420), "Rapport cellule de crise", 72, "white", bold=True)
+    _draw_text(draw, (70, 515), "Entreprises appelées", 64, "#FF3038", bold=True)
     _draw_text(
         draw,
         (70, 590),
         "Cartographie, suivi territorial et analyse des appels",
-        26,
+        32,
         "white",
     )
 
@@ -2571,15 +2571,15 @@ def create_v8_report_pages(df: pd.DataFrame) -> list[PILImage.Image]:
         outline=V8_BLUE,
         radius=28,
     )
-    _draw_text(draw, (105, 1165), "PÉRIMÈTRE DU RAPPORT", 24, "white", bold=True)
+    _draw_text(draw, (105, 1165), "PÉRIMÈTRE DU RAPPORT", 30, "white", bold=True)
     scope = report_scope_text(df)
-    _draw_text(draw, (105, 1235), scope, 21, "white")
-    _draw_text(draw, (105, 1315), f"Date de l'export : {export_date}", 21, "white")
+    _draw_text(draw, (105, 1240), scope, 26, "white")
+    _draw_text(draw, (105, 1325), f"Date de l'export : {export_date}", 26, "white")
     _draw_text(
         draw,
         (105, 1400),
         "Document généré automatiquement à partir des filtres actifs.",
-        18,
+        22,
         "#DCE6F0",
     )
     pages.append(page.convert("RGB"))
@@ -2587,13 +2587,13 @@ def create_v8_report_pages(df: pd.DataFrame) -> list[PILImage.Image]:
     # PAGE 2 — TABLEAU DE BORD
     page, draw = _new_page()
     _draw_header(page, draw, "Tableau de bord")
-    _draw_text(draw, (65, 215), "Synthèse de la campagne d'appels", 34, V8_TEXT, bold=True)
-    _draw_text(draw, (65, 260), report_scope_text(df), 18, V8_MUTED)
+    _draw_text(draw, (65, 215), "Synthèse de la campagne d'appels", 42, V8_TEXT, bold=True)
+    _draw_text(draw, (65, 268), report_scope_text(df), 23, V8_MUTED)
 
     card_w = 350
-    card_h = 180
+    card_h = 205
     xs = [65, 445, 825]
-    ys = [315, 525]
+    ys = [315, 550]
     kpis = [
         ("Entreprises appelées", metrics["total"], "Périmètre filtré"),
         ("Contactées", state_counts["Entreprise contactée"], "Échange direct"),
@@ -2609,17 +2609,17 @@ def create_v8_report_pages(df: pd.DataFrame) -> list[PILImage.Image]:
         y = ys[row]
         _draw_kpi_card(draw, (x, y, x + card_w, y + card_h), *item)
 
-    _rounded_card(draw, (65, 770, 1175, 1570), fill="#E4EDF7", outline="#B9CCE0")
-    draw.rectangle((65, 770, 77, 1570), fill=V8_RED)
-    _draw_text(draw, (105, 815), "Remarques principales", 30, V8_TEXT, bold=True)
-    ry = 885
+    _rounded_card(draw, (65, 815, 1175, 1570), fill="#E4EDF7", outline="#B9CCE0")
+    draw.rectangle((65, 815, 77, 1570), fill=V8_RED)
+    _draw_text(draw, (105, 855), "Remarques principales", 38, V8_TEXT, bold=True)
+    ry = 930
     for remark in remarks:
         draw.ellipse((105, ry + 7, 119, ry + 21), fill=V8_RED)
         lines = [remark[i:i+92] for i in range(0, len(remark), 92)]
         for line in lines:
-            _draw_text(draw, (135, ry), line, 20, V8_TEXT)
-            ry += 28
-        ry += 18
+            _draw_text(draw, (135, ry), line, 26, V8_TEXT)
+            ry += 36
+        ry += 24
         if ry > 1510:
             break
 
@@ -2629,8 +2629,8 @@ def create_v8_report_pages(df: pd.DataFrame) -> list[PILImage.Image]:
     # PAGE 3 — CARTE
     page, draw = _new_page()
     _draw_header(page, draw, "Cartographie du périmètre")
-    _draw_text(draw, (65, 215), "Entreprises appelées", 34, V8_TEXT, bold=True)
-    _draw_text(draw, (65, 260), report_scope_text(df), 18, V8_MUTED)
+    _draw_text(draw, (65, 215), "Entreprises appelées", 42, V8_TEXT, bold=True)
+    _draw_text(draw, (65, 268), report_scope_text(df), 23, V8_MUTED)
 
     _rounded_card(draw, (55, 305, 1185, 1550))
     map_bytes, excluded = create_osm_report_map(df)
@@ -2652,7 +2652,7 @@ def create_v8_report_pages(df: pd.DataFrame) -> list[PILImage.Image]:
     lx = 95
     for label, color in legend_items:
         draw.ellipse((lx, legend_y, lx + 16, legend_y + 16), fill=color)
-        _draw_text(draw, (lx + 24, legend_y - 4), label, 14, V8_MUTED)
+        _draw_text(draw, (lx + 24, legend_y - 4), label, 18, V8_MUTED)
         lx += 210
 
     if excluded:
