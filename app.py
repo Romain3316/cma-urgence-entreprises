@@ -13,12 +13,14 @@ import pydeck as pdk
 import requests
 import streamlit as st
 from reportlab.graphics.shapes import Circle, Drawing, Line, Rect, String
+from staticmap import CircleMarker, StaticMap
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import (
+    Image,
     PageBreak,
     Paragraph,
     SimpleDocTemplate,
@@ -49,6 +51,7 @@ CARD_BACKGROUND = "#FFFFFF"
 BORDER_COLOR = "#E3E7ED"
 
 GEOCODING_URL = "https://data.geopf.fr/geocodage/search"
+CMA_LOGO_PATH = "logo_cma_na_gironde.png"
 
 CONTACT_STATES = [
     "Entreprise contactée",
@@ -117,6 +120,11 @@ THEME_HEX = {
 # ============================================================
 
 EPCI_COMMUNES: dict[str, list[str]] = {
+    "CC Jalle Eau Bourde": [
+        "Canéjan",
+        "Cestas",
+        "Saint-Jean-d'Illac",
+    ],
     "Bordeaux Métropole": [
         "Ambarès-et-Lagrave",
         "Ambès",
@@ -232,6 +240,7 @@ EPCI_COMMUNES: dict[str, list[str]] = {
 }
 
 EPCI_TO_GRAND_TERRITORY = {
+    "CC Jalle Eau Bourde": "Ouest bordelais",
     "Bordeaux Métropole": "Bordeaux Métropole",
     "CC Médoc Atlantique": "Médoc",
     "CC Médoc Cœur de Presqu'île": "Médoc",
@@ -1375,20 +1384,103 @@ def report_metrics(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def create_report_map_drawing(df: pd.DataFrame) -> Drawing:
+def prepare_pdf_map_points(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     """
-    Produit une carte vectorielle directement avec ReportLab.
-    Aucun module graphique supplémentaire n'est requis.
+    Nettoie les coordonnées avant la carte PDF :
+    - conserve uniquement les points géocodés ;
+    - écarte les coordonnées hors emprise Gironde élargie ;
+    - écarte les valeurs aberrantes qui écraseraient le zoom.
+    """
+    valid = df.dropna(subset=["Latitude", "Longitude"]).copy()
+    if valid.empty:
+        return valid, 0
 
-    Il s'agit d'une représentation géographique des coordonnées géocodées,
-    avec une emprise adaptée aux filtres actifs. Les communes sont indiquées
-    comme repères et les points reprennent les couleurs des états de contact.
+    initial_count = len(valid)
+
+    valid = valid[
+        valid["Longitude"].between(-1.35, 0.25)
+        & valid["Latitude"].between(44.15, 45.75)
+    ].copy()
+
+    if len(valid) >= 8:
+        lon_q1 = valid["Longitude"].quantile(0.25)
+        lon_q3 = valid["Longitude"].quantile(0.75)
+        lat_q1 = valid["Latitude"].quantile(0.25)
+        lat_q3 = valid["Latitude"].quantile(0.75)
+
+        lon_iqr = max(lon_q3 - lon_q1, 0.025)
+        lat_iqr = max(lat_q3 - lat_q1, 0.025)
+
+        robust_mask = (
+            valid["Longitude"].between(
+                lon_q1 - 4.0 * lon_iqr,
+                lon_q3 + 4.0 * lon_iqr,
+            )
+            & valid["Latitude"].between(
+                lat_q1 - 4.0 * lat_iqr,
+                lat_q3 + 4.0 * lat_iqr,
+            )
+        )
+
+        # Ne pas supprimer un petit groupe territorial réellement filtré.
+        robust = valid[robust_mask].copy()
+        if len(robust) >= max(3, int(len(valid) * 0.85)):
+            valid = robust
+
+    excluded_count = initial_count - len(valid)
+    return valid, excluded_count
+
+
+def create_osm_report_map(df: pd.DataFrame) -> tuple[bytes | None, int]:
     """
+    Génère une véritable carte OpenStreetMap pour le PDF.
+
+    En cas d'indisponibilité temporaire des tuiles, la fonction renvoie None
+    et le rapport utilise automatiquement une représentation de secours.
+    """
+    valid, excluded_count = prepare_pdf_map_points(df)
+
+    if valid.empty:
+        return None, excluded_count
+
+    try:
+        static_map = StaticMap(
+            1500,
+            900,
+            url_template="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        )
+
+        for _, row in valid.iterrows():
+            state = str(row.get("État du contact", "Non renseigné"))
+            marker_color = CONTACT_STATE_HEX.get(state, "#667085")
+            static_map.add_marker(
+                CircleMarker(
+                    (
+                        float(row["Longitude"]),
+                        float(row["Latitude"]),
+                    ),
+                    marker_color,
+                    10,
+                )
+            )
+
+        image = static_map.render()
+        buffer = BytesIO()
+        image.save(buffer, format="PNG", optimize=True)
+        buffer.seek(0)
+        return buffer.getvalue(), excluded_count
+
+    except Exception:
+        return None, excluded_count
+
+
+def create_fallback_report_map(df: pd.DataFrame) -> Drawing:
+    """Carte de secours compacte si les tuiles OSM ne sont pas disponibles."""
+    valid, excluded_count = prepare_pdf_map_points(df)
     width = 25.2 * cm
-    height = 14.8 * cm
+    height = 14.6 * cm
     drawing = Drawing(width, height)
 
-    # Fond et cadre
     drawing.add(
         Rect(
             0,
@@ -1400,20 +1492,6 @@ def create_report_map_drawing(df: pd.DataFrame) -> Drawing:
             strokeWidth=0.8,
         )
     )
-
-    title = "Cartographie des entreprises appelées — périmètre filtré"
-    drawing.add(
-        String(
-            14,
-            height - 22,
-            title,
-            fontName="Helvetica-Bold",
-            fontSize=12,
-            fillColor=colors.HexColor("#172033"),
-        )
-    )
-
-    valid = df.dropna(subset=["Latitude", "Longitude"]).copy()
 
     if valid.empty:
         drawing.add(
@@ -1429,19 +1507,16 @@ def create_report_map_drawing(df: pd.DataFrame) -> Drawing:
         )
         return drawing
 
-    plot_left = 32
-    plot_bottom = 30
-    plot_right = width - 18
-    plot_top = height - 42
-    plot_width = plot_right - plot_left
-    plot_height = plot_top - plot_bottom
+    plot_left = 25
+    plot_bottom = 25
+    plot_right = width - 20
+    plot_top = height - 20
 
     lon_min = float(valid["Longitude"].min())
     lon_max = float(valid["Longitude"].max())
     lat_min = float(valid["Latitude"].min())
     lat_max = float(valid["Latitude"].max())
 
-    # Éviter une division par zéro sur un périmètre très restreint.
     if abs(lon_max - lon_min) < 0.002:
         lon_min -= 0.01
         lon_max += 0.01
@@ -1449,112 +1524,258 @@ def create_report_map_drawing(df: pd.DataFrame) -> Drawing:
         lat_min -= 0.01
         lat_max += 0.01
 
-    lon_margin = max((lon_max - lon_min) * 0.08, 0.006)
-    lat_margin = max((lat_max - lat_min) * 0.08, 0.006)
+    lon_margin = max((lon_max - lon_min) * 0.12, 0.008)
+    lat_margin = max((lat_max - lat_min) * 0.12, 0.008)
     lon_min -= lon_margin
     lon_max += lon_margin
     lat_min -= lat_margin
     lat_max += lat_margin
 
     def project(longitude: float, latitude: float) -> tuple[float, float]:
-        x = plot_left + ((longitude - lon_min) / (lon_max - lon_min)) * plot_width
-        y = plot_bottom + ((latitude - lat_min) / (lat_max - lat_min)) * plot_height
+        x = plot_left + (
+            (longitude - lon_min) / (lon_max - lon_min)
+        ) * (plot_right - plot_left)
+        y = plot_bottom + (
+            (latitude - lat_min) / (lat_max - lat_min)
+        ) * (plot_top - plot_bottom)
         return x, y
 
-    # Grille légère
-    for step in range(1, 5):
-        x = plot_left + plot_width * step / 5
-        y = plot_bottom + plot_height * step / 5
-        drawing.add(
-            Line(
-                x,
-                plot_bottom,
-                x,
-                plot_top,
-                strokeColor=colors.HexColor("#D0D5DD"),
-                strokeWidth=0.35,
-            )
-        )
-        drawing.add(
-            Line(
-                plot_left,
-                y,
-                plot_right,
-                y,
-                strokeColor=colors.HexColor("#D0D5DD"),
-                strokeWidth=0.35,
-            )
-        )
-
-    # Repères communaux
-    commune_centers = (
-        valid.groupby("Commune")[["Longitude", "Latitude"]]
-        .mean()
-        .reset_index()
-    )
-    for _, row in commune_centers.iterrows():
-        x, y = project(float(row["Longitude"]), float(row["Latitude"]))
-        drawing.add(
-            String(
-                x + 4,
-                y + 5,
-                str(row["Commune"])[:30],
-                fontName="Helvetica",
-                fontSize=6.2,
-                fillColor=colors.HexColor("#475467"),
-            )
-        )
-
-    # Points
     for _, row in valid.iterrows():
         x, y = project(float(row["Longitude"]), float(row["Latitude"]))
         state = str(row.get("État du contact", "Non renseigné"))
-        hex_color = CONTACT_STATE_HEX.get(state, "#667085")
-
         drawing.add(
             Circle(
                 x,
                 y,
-                3.6,
-                fillColor=colors.HexColor(hex_color),
+                4.1,
+                fillColor=colors.HexColor(
+                    CONTACT_STATE_HEX.get(state, "#667085")
+                ),
                 strokeColor=colors.white,
                 strokeWidth=0.7,
             )
         )
 
-    # Légende
-    legend_x = plot_left
-    legend_y = 12
-    for index, state in enumerate(
-        [
-            s
-            for s in CONTACT_STATES
-            if s in set(valid["État du contact"].dropna().unique())
-        ]
-    ):
-        x = legend_x + index * 115
-        drawing.add(
-            Circle(
-                x,
-                legend_y,
-                3,
-                fillColor=colors.HexColor(
-                    CONTACT_STATE_HEX.get(state, "#667085")
-                ),
-                strokeColor=colors.white,
-                strokeWidth=0.5,
-            )
+    return drawing
+
+
+def create_horizontal_bar_chart(
+    data: pd.Series,
+    title: str,
+    width: float = 12.1 * cm,
+    height: float = 7.1 * cm,
+    max_items: int = 8,
+) -> Drawing:
+    """Graphique en barres horizontal natif ReportLab."""
+    drawing = Drawing(width, height)
+
+    drawing.add(
+        Rect(
+            0,
+            0,
+            width,
+            height,
+            fillColor=colors.white,
+            strokeColor=colors.HexColor("#E4E7EC"),
+            strokeWidth=0.7,
         )
+    )
+    drawing.add(
+        Rect(
+            0,
+            height - 0.65 * cm,
+            width,
+            0.65 * cm,
+            fillColor=colors.HexColor("#172033"),
+            strokeColor=colors.HexColor("#172033"),
+        )
+    )
+    drawing.add(
+        String(
+            10,
+            height - 0.43 * cm,
+            title,
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            fillColor=colors.white,
+        )
+    )
+
+    clean = data.dropna().sort_values(ascending=False).head(max_items)
+    if clean.empty:
         drawing.add(
             String(
-                x + 6,
-                legend_y - 2,
-                state[:24],
+                width / 2,
+                height / 2,
+                "Aucune donnée",
                 fontName="Helvetica",
-                fontSize=5.8,
-                fillColor=colors.HexColor("#475467"),
+                fontSize=9,
+                textAnchor="middle",
+                fillColor=colors.HexColor("#667085"),
             )
         )
+        return drawing
+
+    max_value = max(float(clean.max()), 1.0)
+    chart_top = height - 1.0 * cm
+    chart_bottom = 0.35 * cm
+    available_height = chart_top - chart_bottom
+    row_height = available_height / len(clean)
+    label_width = 4.8 * cm
+    bar_left = label_width
+    bar_right = width - 1.1 * cm
+    bar_max_width = bar_right - bar_left
+
+    for index, (label, value) in enumerate(clean.items()):
+        y = chart_top - (index + 0.72) * row_height
+        label_text = str(label)
+        if len(label_text) > 28:
+            label_text = label_text[:27] + "…"
+
+        drawing.add(
+            String(
+                8,
+                y,
+                label_text,
+                fontName="Helvetica",
+                fontSize=6.7,
+                fillColor=colors.HexColor("#344054"),
+            )
+        )
+
+        drawing.add(
+            Rect(
+                bar_left,
+                y - 1.5,
+                bar_max_width,
+                5.8,
+                fillColor=colors.HexColor("#F2F4F7"),
+                strokeColor=None,
+            )
+        )
+
+        value_width = bar_max_width * float(value) / max_value
+        drawing.add(
+            Rect(
+                bar_left,
+                y - 1.5,
+                value_width,
+                5.8,
+                fillColor=colors.HexColor(CMA_RED),
+                strokeColor=None,
+            )
+        )
+
+        drawing.add(
+            String(
+                min(bar_left + value_width + 4, width - 22),
+                y,
+                str(int(value)),
+                fontName="Helvetica-Bold",
+                fontSize=6.7,
+                fillColor=colors.HexColor("#172033"),
+            )
+        )
+
+    return drawing
+
+
+def create_daily_calls_chart(
+    df: pd.DataFrame,
+    width: float = 25.0 * cm,
+    height: float = 6.6 * cm,
+) -> Drawing:
+    """Mini graphique chronologique en colonnes pour le rapport."""
+    drawing = Drawing(width, height)
+
+    drawing.add(
+        Rect(
+            0,
+            0,
+            width,
+            height,
+            fillColor=colors.white,
+            strokeColor=colors.HexColor("#E4E7EC"),
+            strokeWidth=0.7,
+        )
+    )
+    drawing.add(
+        Rect(
+            0,
+            height - 0.65 * cm,
+            width,
+            0.65 * cm,
+            fillColor=colors.HexColor("#172033"),
+            strokeColor=colors.HexColor("#172033"),
+        )
+    )
+    drawing.add(
+        String(
+            10,
+            height - 0.43 * cm,
+            "Évolution quotidienne des appels",
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            fillColor=colors.white,
+        )
+    )
+
+    dates = pd.to_datetime(df["Date de l'appel"], errors="coerce").dropna()
+    if dates.empty:
+        drawing.add(
+            String(
+                width / 2,
+                height / 2,
+                "Aucune date exploitable",
+                textAnchor="middle",
+                fontName="Helvetica",
+                fontSize=9,
+                fillColor=colors.HexColor("#667085"),
+            )
+        )
+        return drawing
+
+    daily = dates.dt.date.value_counts().sort_index()
+    max_days = 30
+    if len(daily) > max_days:
+        daily = daily.tail(max_days)
+
+    chart_left = 1.0 * cm
+    chart_right = width - 0.5 * cm
+    chart_bottom = 0.75 * cm
+    chart_top = height - 1.0 * cm
+    chart_width = chart_right - chart_left
+    chart_height = chart_top - chart_bottom
+    max_value = max(float(daily.max()), 1.0)
+    slot_width = chart_width / len(daily)
+    bar_width = max(slot_width * 0.62, 2.0)
+
+    for index, (day, value) in enumerate(daily.items()):
+        x = chart_left + index * slot_width + (slot_width - bar_width) / 2
+        bar_height = chart_height * float(value) / max_value
+
+        drawing.add(
+            Rect(
+                x,
+                chart_bottom,
+                bar_width,
+                bar_height,
+                fillColor=colors.HexColor(CMA_RED),
+                strokeColor=None,
+            )
+        )
+
+        if index % max(1, len(daily) // 8) == 0 or index == len(daily) - 1:
+            drawing.add(
+                String(
+                    x,
+                    chart_bottom - 10,
+                    pd.Timestamp(day).strftime("%d/%m"),
+                    fontName="Helvetica",
+                    fontSize=5.8,
+                    fillColor=colors.HexColor("#667085"),
+                )
+            )
 
     return drawing
 
@@ -1635,71 +1856,75 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
     state_counts = contact_state_counts(df)
     progress_rate = contact_progress_rate(df)
 
-    story = [
-        Spacer(1, 1.2 * cm),
-        Paragraph("RAPPORT CELLULE DE CRISE", styles["ReportTitle"]),
-        Spacer(1, 0.2 * cm),
-        Paragraph(
-            "Cartographie et bilan des entreprises appelées",
-            ParagraphStyle(
-                name="CoverSubtitle",
-                parent=styles["Heading2"],
-                fontName="Helvetica",
-                fontSize=15,
-                leading=18,
-                textColor=colors.HexColor("#475467"),
-                alignment=TA_CENTER,
+    story = []
+
+    logo_path = Path(CMA_LOGO_PATH)
+    if logo_path.exists():
+        logo = Image(str(logo_path))
+        logo.drawHeight = 3.35 * cm
+        logo.drawWidth = 13.4 * cm
+        logo.hAlign = "CENTER"
+        story.append(Spacer(1, 0.8 * cm))
+        story.append(logo)
+    else:
+        story.append(Spacer(1, 1.0 * cm))
+        story.append(
+            Paragraph(
+                "CMA Nouvelle-Aquitaine",
+                styles["ReportTitle"],
+            )
+        )
+
+    story.extend(
+        [
+            Spacer(1, 1.25 * cm),
+            Table(
+                [["RAPPORT CELLULE DE CRISE"]],
+                colWidths=[18.5 * cm],
+                rowHeights=[1.55 * cm],
+                style=TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(CMA_RED)),
+                        ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
+                        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 22),
+                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("BOX", (0, 0), (-1, -1), 0, colors.HexColor(CMA_RED)),
+                    ]
+                ),
+                hAlign="CENTER",
             ),
-        ),
-        Spacer(1, 0.7 * cm),
-        Table(
-            [
-                [
-                    Paragraph(
-                        "<b>CMA Nouvelle-Aquitaine</b>",
-                        ParagraphStyle(
-                            name="CoverCMA",
-                            parent=styles["BodyText"],
-                            fontName="Helvetica-Bold",
-                            fontSize=14,
-                            textColor=colors.white,
-                            alignment=TA_CENTER,
-                        ),
-                    )
-                ]
-            ],
-            colWidths=[11 * cm],
-            rowHeights=[1.25 * cm],
-            style=TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(CMA_RED)),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("BOX", (0, 0), (-1, -1), 0, colors.HexColor(CMA_RED)),
-                ]
+            Spacer(1, 0.55 * cm),
+            Paragraph(
+                "Cartographie et bilan des entreprises appelées",
+                ParagraphStyle(
+                    name="CoverSubtitleV5",
+                    parent=styles["Heading2"],
+                    fontName="Helvetica-Bold",
+                    fontSize=17,
+                    leading=21,
+                    textColor=colors.HexColor("#172033"),
+                    alignment=TA_CENTER,
+                ),
             ),
-            hAlign="CENTER",
-        ),
-        Spacer(1, 1.0 * cm),
-        Paragraph(report_scope_text(df), styles["BodyText"]),
-        Spacer(1, 0.25 * cm),
-        Paragraph(
-            f"Rapport généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}",
-            styles["SmallMuted"],
-        ),
-        Spacer(1, 1.0 * cm),
-        Paragraph(
-            "Ce rapport reprend exactement les filtres actifs au moment de sa génération.",
-            ParagraphStyle(
-                name="CoverNote",
-                parent=styles["BodyText"],
-                fontSize=10,
-                leading=14,
-                textColor=colors.HexColor("#667085"),
-                alignment=TA_CENTER,
+            Spacer(1, 1.1 * cm),
+            Paragraph(
+                f"Date de l’export : {datetime.now().strftime('%d/%m/%Y à %H:%M')}",
+                ParagraphStyle(
+                    name="ExportDate",
+                    parent=styles["BodyText"],
+                    fontName="Helvetica",
+                    fontSize=11,
+                    leading=14,
+                    textColor=colors.HexColor("#667085"),
+                    alignment=TA_CENTER,
+                ),
             ),
-        ),
-        PageBreak(),
-    ]
+            PageBreak(),
+        ]
+    )
+
 
     metric_data = [
         [
@@ -1742,68 +1967,103 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
     )
     story.extend([metric_table, Spacer(1, 0.35 * cm)])
 
-    # Carte filtrée intégrée directement dans le PDF, sans matplotlib.
-    story.append(create_report_map_drawing(df))
-    story.append(PageBreak())
+    story.append(
+        Paragraph(
+            "Cartographie du périmètre filtré",
+            styles["SectionTitleCMA"],
+        )
+    )
+    story.append(
+        Paragraph(
+            report_scope_text(df),
+            styles["SmallMuted"],
+        )
+    )
+    story.append(Spacer(1, 0.2 * cm))
 
-    story.append(Paragraph("Répartition des appels", styles["SectionTitleCMA"]))
+    map_bytes, excluded_points = create_osm_report_map(df)
+    if map_bytes is not None:
+        map_image = Image(BytesIO(map_bytes))
+        map_image.drawWidth = 25.2 * cm
+        map_image.drawHeight = 15.1 * cm
+        map_image.hAlign = "CENTER"
+        story.append(map_image)
+    else:
+        story.append(create_fallback_report_map(df))
 
-    def summary_table(
-        source: pd.DataFrame,
-        group_column: str,
-        title: str,
-        max_rows: int = 16,
-    ) -> Table:
-        if source.empty:
-            data = [[title, "Nombre"], ["Aucune donnée", "0"]]
-        else:
-            grouped = (
-                source.groupby(group_column)
-                .size()
-                .sort_values(ascending=False)
-                .head(max_rows)
-            )
-            data = [[title, "Nombre"]] + [
-                [str(label), str(int(value))]
-                for label, value in grouped.items()
-            ]
-
-        table = Table(data, colWidths=[8.4 * cm, 2.2 * cm], repeatRows=1)
-        table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#172033")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#D0D5DD")),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F9FAFB")),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("ALIGN", (1, 1), (1, -1), "CENTER"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                    ("TOPPADDING", (0, 0), (-1, -1), 4),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ]
+    if excluded_points:
+        story.append(Spacer(1, 0.12 * cm))
+        story.append(
+            Paragraph(
+                f"{excluded_points} point(s) géographiques aberrant(s) ou hors emprise "
+                "ont été exclus du cadrage de la carte.",
+                styles["SmallMuted"],
             )
         )
-        return table
 
-    tables = Table(
+    story.append(
+        Paragraph(
+            "Fond cartographique © contributeurs OpenStreetMap.",
+            styles["SmallMuted"],
+        )
+    )
+    story.append(PageBreak())
+
+    story.append(
+        Paragraph(
+            "Analyse statistique",
+            styles["SectionTitleCMA"],
+        )
+    )
+
+    epci_series = (
+        df.groupby("EPCI / CDC").size()
+        if not df.empty
+        else pd.Series(dtype=int)
+    )
+    commune_series = (
+        df.groupby("Commune").size()
+        if not df.empty
+        else pd.Series(dtype=int)
+    )
+    contact_series = (
+        df.groupby("État du contact").size()
+        if not df.empty
+        else pd.Series(dtype=int)
+    )
+    theme_series = (
+        df.groupby("Thématique").size()
+        if not df.empty
+        else pd.Series(dtype=int)
+    )
+
+    charts_table = Table(
         [
             [
-                summary_table(df, "État du contact", "État du contact"),
-                summary_table(df, "EPCI / CDC", "CDC / EPCI"),
+                create_horizontal_bar_chart(
+                    contact_series,
+                    "État des contacts",
+                ),
+                create_horizontal_bar_chart(
+                    epci_series,
+                    "Répartition par CDC / EPCI",
+                ),
             ],
             [
-                summary_table(df, "Commune", "Communes"),
-                summary_table(df, "Thématique", "Thématiques"),
+                create_horizontal_bar_chart(
+                    commune_series,
+                    "Principales communes",
+                ),
+                create_horizontal_bar_chart(
+                    theme_series,
+                    "Thématiques des commentaires",
+                ),
             ],
         ],
         colWidths=[12.5 * cm, 12.5 * cm],
         hAlign="CENTER",
     )
-    tables.setStyle(
+    charts_table.setStyle(
         TableStyle(
             [
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -1814,8 +2074,10 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
             ]
         )
     )
-    story.append(tables)
-    story.append(Spacer(1, 0.3 * cm))
+    story.append(charts_table)
+    story.append(PageBreak())
+    story.append(create_daily_calls_chart(df))
+    story.append(Spacer(1, 0.35 * cm))
     story.append(
         Paragraph(
             "Précaution RGPD : le rapport reprend uniquement les informations "
@@ -1824,90 +2086,7 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
         )
     )
 
-    story.append(PageBreak())
-    story.append(
-        Paragraph(
-            "Liste synthétique des entreprises du périmètre",
-            styles["SectionTitleCMA"],
-        )
-    )
 
-    if df.empty:
-        story.append(Paragraph("Aucune entreprise dans ce périmètre.", styles["BodyText"]))
-    else:
-        company_rows = [
-            [
-                "Entreprise",
-                "Commune",
-                "CDC / EPCI",
-                "Date",
-                "État du contact",
-            ]
-        ]
-
-        ordered = df.sort_values(
-            ["EPCI / CDC", "Commune", "Nom de l'entreprise"],
-            na_position="last",
-        ).head(120)
-
-        for _, row in ordered.iterrows():
-            call_date = pd.to_datetime(
-                row.get("Date de l'appel"),
-                errors="coerce",
-            )
-            date_text = (
-                call_date.strftime("%d/%m/%Y")
-                if not pd.isna(call_date)
-                else ""
-            )
-            company_rows.append(
-                [
-                    safe_tooltip_text(row.get("Nom de l'entreprise", ""), 45),
-                    safe_tooltip_text(row.get("Commune", ""), 24),
-                    safe_tooltip_text(row.get("EPCI / CDC", ""), 35),
-                    date_text,
-                    safe_tooltip_text(row.get("État du contact", ""), 30),
-                ]
-            )
-
-        company_table = Table(
-            company_rows,
-            colWidths=[6.2 * cm, 3.4 * cm, 5.6 * cm, 2.6 * cm, 5.4 * cm],
-            repeatRows=1,
-        )
-        company_table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#172033")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 7),
-                    ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#D0D5DD")),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [
-                        colors.white,
-                        colors.HexColor("#F9FAFB"),
-                    ]),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                ]
-            )
-        )
-        story.append(company_table)
-
-        if len(df) > 120:
-            story.append(
-                Spacer(1, 0.2 * cm)
-            )
-            story.append(
-                Paragraph(
-                    f"La liste PDF est limitée aux 120 premières lignes sur {len(df)}. "
-                    "L'export Excel contient l'intégralité des données.",
-                    styles["SmallMuted"],
-                )
-            )
 
     doc.build(story)
     buffer.seek(0)
