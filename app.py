@@ -9,10 +9,6 @@ import html
 import re
 import unicodedata
 
-try:
-    from xhtml2pdf import pisa
-except Exception:
-    pisa = None
 
 import pandas as pd
 import plotly.express as px
@@ -21,6 +17,8 @@ import requests
 import streamlit as st
 from reportlab.graphics.shapes import Circle, Drawing, Line, Rect, String
 from staticmap import CircleMarker, StaticMap
+from PIL import Image as PILImage, ImageDraw, ImageFont, ImageOps
+from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
@@ -604,7 +602,15 @@ def normalize_place(value: Any) -> str:
 def parse_call_date(value: Any) -> pd.Timestamp | pd.NaT:
     if pd.isna(value) or normalize_text(value) == "":
         return pd.NaT
-    return pd.to_datetime(value, errors="coerce", dayfirst=True)
+
+    text = normalize_text(value)
+
+    # Formats ISO issus d'Excel / Lists : AAAA-MM-JJ HH:MM:SS
+    if re.match(r"^\d{4}-\d{2}-\d{2}", text):
+        return pd.to_datetime(text, errors="coerce", dayfirst=False)
+
+    # Formats français : JJ/MM/AAAA
+    return pd.to_datetime(text, errors="coerce", dayfirst=True)
 
 
 def commune_to_epci(commune: str) -> tuple[str, str]:
@@ -2247,6 +2253,470 @@ def create_premium_pdf_report(df: pd.DataFrame) -> bytes:
 
 
 
+# ============================================================
+# RAPPORT V8 — MOTEUR IMAGE ROBUSTE
+# ============================================================
+
+V8_PAGE_SIZE = (1240, 1754)  # A4 portrait à ~150 dpi
+V8_NAVY = "#173A63"
+V8_BLUE = "#2C527E"
+V8_RED = "#E31B23"
+V8_BG = "#EEF2F6"
+V8_CARD = "#FFFFFF"
+V8_TEXT = "#173A63"
+V8_MUTED = "#667085"
+V8_BORDER = "#D7E0EA"
+
+
+def _font_path(bold: bool = False) -> str | None:
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return candidate
+    return None
+
+
+def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    path = _font_path(bold)
+    if path:
+        return ImageFont.truetype(path, size=size)
+    return ImageFont.load_default()
+
+
+def _draw_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    size: int,
+    fill: str,
+    bold: bool = False,
+    anchor: str | None = None,
+) -> None:
+    draw.text(
+        xy,
+        str(text),
+        font=_font(size, bold),
+        fill=fill,
+        anchor=anchor,
+    )
+
+
+def _rounded_card(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    fill: str = V8_CARD,
+    outline: str = V8_BORDER,
+    radius: int = 22,
+    width: int = 2,
+) -> None:
+    draw.rounded_rectangle(
+        box,
+        radius=radius,
+        fill=fill,
+        outline=outline,
+        width=width,
+    )
+
+
+def _load_logo_image(max_width: int = 360) -> PILImage.Image | None:
+    try:
+        raw = base64.b64decode(CMA_LOGO_BASE64)
+        image = PILImage.open(BytesIO(raw)).convert("RGBA")
+        ratio = max_width / image.width
+        return image.resize(
+            (max_width, int(image.height * ratio)),
+            PILImage.Resampling.LANCZOS,
+        )
+    except Exception:
+        return None
+
+
+def _paste_logo(
+    page: PILImage.Image,
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    width: int = 345,
+) -> None:
+    logo = _load_logo_image(width)
+    box_h = 150
+    box_w = width + 40
+    draw.rounded_rectangle(
+        (x, y, x + box_w, y + box_h),
+        radius=20,
+        fill="white",
+        outline="#CBD5E1",
+        width=2,
+    )
+    if logo is not None:
+        px = x + (box_w - logo.width) // 2
+        py = y + (box_h - logo.height) // 2
+        page.alpha_composite(logo, (px, py))
+    else:
+        _draw_text(
+            draw,
+            (x + box_w // 2, y + box_h // 2),
+            "CMA Nouvelle-Aquitaine",
+            28,
+            V8_RED,
+            bold=True,
+            anchor="mm",
+        )
+
+
+def _draw_header(
+    page: PILImage.Image,
+    draw: ImageDraw.ImageDraw,
+    title: str,
+) -> None:
+    draw.rectangle((0, 0, V8_PAGE_SIZE[0], 18), fill=V8_RED)
+    draw.rectangle((0, 18, V8_PAGE_SIZE[0], 170), fill=V8_NAVY)
+    _draw_text(
+        draw,
+        (65, 76),
+        title.upper(),
+        28,
+        "white",
+        bold=True,
+    )
+    _paste_logo(page, draw, 835, 28, width=300)
+
+
+def _draw_footer(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+) -> None:
+    y = V8_PAGE_SIZE[1] - 50
+    draw.line((60, y - 12, V8_PAGE_SIZE[0] - 60, y - 12), fill="#CBD5E1", width=2)
+    _draw_text(draw, (60, y), text, 16, V8_MUTED)
+
+
+def _draw_kpi_card(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    label: str,
+    value: Any,
+    detail: str,
+) -> None:
+    _rounded_card(draw, box)
+    x1, y1, x2, y2 = box
+    draw.rounded_rectangle(
+        (x1, y1, x2, y1 + 12),
+        radius=20,
+        fill=V8_RED,
+    )
+    _draw_text(draw, (x1 + 24, y1 + 34), label, 20, V8_MUTED, bold=True)
+    _draw_text(draw, (x1 + 24, y1 + 84), value, 42, V8_TEXT, bold=True)
+    _draw_text(draw, (x1 + 24, y2 - 42), detail, 16, "#98A2B3")
+
+
+def _draw_bar_chart(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    title: str,
+    series: pd.Series,
+    max_items: int = 8,
+) -> None:
+    _rounded_card(draw, box)
+    x1, y1, x2, y2 = box
+    draw.rounded_rectangle((x1, y1, x2, y1 + 72), radius=20, fill=V8_NAVY)
+    draw.rectangle((x1, y1 + 45, x2, y1 + 72), fill=V8_NAVY)
+    draw.rectangle((x1, y1, x1 + 10, y1 + 72), fill=V8_RED)
+    _draw_text(draw, (x1 + 28, y1 + 21), title, 22, "white", bold=True)
+
+    clean = series.dropna().sort_values(ascending=False).head(max_items)
+    if clean.empty:
+        _draw_text(
+            draw,
+            ((x1 + x2) // 2, (y1 + y2) // 2),
+            "Aucune donnée",
+            20,
+            V8_MUTED,
+            anchor="mm",
+        )
+        return
+
+    max_value = max(float(clean.max()), 1.0)
+    chart_top = y1 + 100
+    row_h = max(52, int((y2 - chart_top - 20) / len(clean)))
+    label_w = int((x2 - x1) * 0.42)
+    bar_x = x1 + label_w
+    bar_max_w = x2 - bar_x - 70
+
+    for idx, (label, value) in enumerate(clean.items()):
+        cy = chart_top + idx * row_h
+        label_text = str(label)
+        if len(label_text) > 28:
+            label_text = label_text[:27] + "…"
+        _draw_text(draw, (x1 + 22, cy + 10), label_text, 16, "#344054")
+        draw.rounded_rectangle(
+            (bar_x, cy + 15, bar_x + bar_max_w, cy + 31),
+            radius=8,
+            fill="#EDF1F5",
+        )
+        value_w = int(bar_max_w * float(value) / max_value)
+        draw.rounded_rectangle(
+            (bar_x, cy + 15, bar_x + max(value_w, 8), cy + 31),
+            radius=8,
+            fill=V8_RED,
+        )
+        _draw_text(draw, (bar_x + bar_max_w + 12, cy + 8), int(value), 16, V8_TEXT, bold=True)
+
+
+def _draw_timeline(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    df: pd.DataFrame,
+) -> None:
+    _rounded_card(draw, box)
+    x1, y1, x2, y2 = box
+    draw.rounded_rectangle((x1, y1, x2, y1 + 72), radius=20, fill=V8_NAVY)
+    draw.rectangle((x1, y1 + 45, x2, y1 + 72), fill=V8_NAVY)
+    draw.rectangle((x1, y1, x1 + 10, y1 + 72), fill=V8_RED)
+    _draw_text(draw, (x1 + 28, y1 + 21), "Évolution quotidienne des appels", 22, "white", bold=True)
+
+    dates = pd.to_datetime(df["Date de l'appel"], errors="coerce").dropna()
+    if dates.empty:
+        _draw_text(
+            draw,
+            ((x1 + x2) // 2, (y1 + y2) // 2),
+            "Aucune date exploitable",
+            20,
+            V8_MUTED,
+            anchor="mm",
+        )
+        return
+
+    daily = dates.dt.date.value_counts().sort_index()
+    if len(daily) > 30:
+        daily = daily.tail(30)
+
+    max_value = max(int(daily.max()), 1)
+    chart_left = x1 + 45
+    chart_right = x2 - 30
+    chart_bottom = y2 - 70
+    chart_top = y1 + 105
+    slot = (chart_right - chart_left) / len(daily)
+
+    for idx, (day, value) in enumerate(daily.items()):
+        bx = int(chart_left + idx * slot + slot * 0.2)
+        bw = max(10, int(slot * 0.6))
+        bh = int((chart_bottom - chart_top) * float(value) / max_value)
+        draw.rounded_rectangle(
+            (bx, chart_bottom - bh, bx + bw, chart_bottom),
+            radius=6,
+            fill=V8_RED,
+        )
+        _draw_text(
+            draw,
+            (bx + bw // 2, chart_bottom - bh - 22),
+            int(value),
+            14,
+            V8_TEXT,
+            bold=True,
+            anchor="mm",
+        )
+        if idx % max(1, len(daily) // 8) == 0 or idx == len(daily) - 1:
+            _draw_text(
+                draw,
+                (bx + bw // 2, chart_bottom + 24),
+                pd.Timestamp(day).strftime("%d/%m"),
+                12,
+                V8_MUTED,
+                anchor="mm",
+            )
+
+
+def _new_page(background: str = V8_BG) -> tuple[PILImage.Image, ImageDraw.ImageDraw]:
+    page = PILImage.new("RGBA", V8_PAGE_SIZE, background)
+    return page, ImageDraw.Draw(page)
+
+
+def create_v8_report_pages(df: pd.DataFrame) -> list[PILImage.Image]:
+    metrics = report_metrics(df)
+    state_counts = contact_state_counts(df)
+    progress_rate = contact_progress_rate(df)
+    remarks = generate_report_remarks(df)
+    export_date = datetime.now().strftime("%d/%m/%Y à %H:%M")
+
+    pages: list[PILImage.Image] = []
+
+    # PAGE 1 — COUVERTURE
+    page, draw = _new_page(V8_NAVY)
+    draw.rectangle((0, 0, V8_PAGE_SIZE[0], 20), fill=V8_RED)
+    _draw_text(draw, (70, 95), "CMA NOUVELLE-AQUITAINE · GIRONDE", 24, "white", bold=True)
+    _paste_logo(page, draw, 790, 50, width=350)
+
+    _draw_text(draw, (70, 430), "Rapport cellule de crise", 58, "white", bold=True)
+    _draw_text(draw, (70, 505), "Entreprises appelées", 52, "#FF3038", bold=True)
+    _draw_text(
+        draw,
+        (70, 590),
+        "Cartographie, suivi territorial et analyse des appels",
+        26,
+        "white",
+    )
+
+    _rounded_card(
+        draw,
+        (70, 1120, 1170, 1540),
+        fill=V8_BLUE,
+        outline=V8_BLUE,
+        radius=28,
+    )
+    _draw_text(draw, (105, 1165), "PÉRIMÈTRE DU RAPPORT", 24, "white", bold=True)
+    scope = report_scope_text(df)
+    _draw_text(draw, (105, 1235), scope, 21, "white")
+    _draw_text(draw, (105, 1315), f"Date de l'export : {export_date}", 21, "white")
+    _draw_text(
+        draw,
+        (105, 1400),
+        "Document généré automatiquement à partir des filtres actifs.",
+        18,
+        "#DCE6F0",
+    )
+    pages.append(page.convert("RGB"))
+
+    # PAGE 2 — TABLEAU DE BORD
+    page, draw = _new_page()
+    _draw_header(page, draw, "Tableau de bord")
+    _draw_text(draw, (65, 215), "Synthèse de la campagne d'appels", 34, V8_TEXT, bold=True)
+    _draw_text(draw, (65, 260), report_scope_text(df), 18, V8_MUTED)
+
+    card_w = 350
+    card_h = 180
+    xs = [65, 445, 825]
+    ys = [315, 525]
+    kpis = [
+        ("Entreprises appelées", metrics["total"], "Périmètre filtré"),
+        ("Contactées", state_counts["Entreprise contactée"], "Échange direct"),
+        ("Message vocal & mail", state_counts["Message vocal & mail envoyé"], "Suivi potentiel"),
+        ("Mauvais numéros", state_counts["Mauvais numéro"], "Coordonnées à corriger"),
+        ("Déjà contactées", state_counts["Déjà contactée"], "Prise en charge existante"),
+        ("Avancement", f"{progress_rate} %", "Traitements finalisés"),
+    ]
+    for idx, item in enumerate(kpis):
+        row = idx // 3
+        col = idx % 3
+        x = xs[col]
+        y = ys[row]
+        _draw_kpi_card(draw, (x, y, x + card_w, y + card_h), *item)
+
+    _rounded_card(draw, (65, 770, 1175, 1570), fill="#E4EDF7", outline="#B9CCE0")
+    draw.rectangle((65, 770, 77, 1570), fill=V8_RED)
+    _draw_text(draw, (105, 815), "Remarques principales", 30, V8_TEXT, bold=True)
+    ry = 885
+    for remark in remarks:
+        draw.ellipse((105, ry + 7, 119, ry + 21), fill=V8_RED)
+        lines = [remark[i:i+92] for i in range(0, len(remark), 92)]
+        for line in lines:
+            _draw_text(draw, (135, ry), line, 20, V8_TEXT)
+            ry += 28
+        ry += 18
+        if ry > 1510:
+            break
+
+    _draw_footer(draw, f"Rapport généré le {export_date} · Usage cellule de crise")
+    pages.append(page.convert("RGB"))
+
+    # PAGE 3 — CARTE
+    page, draw = _new_page()
+    _draw_header(page, draw, "Cartographie du périmètre")
+    _draw_text(draw, (65, 215), "Entreprises appelées", 34, V8_TEXT, bold=True)
+    _draw_text(draw, (65, 260), report_scope_text(df), 18, V8_MUTED)
+
+    _rounded_card(draw, (55, 305, 1185, 1550))
+    map_bytes, excluded = create_osm_report_map(df)
+    if map_bytes:
+        map_img = PILImage.open(BytesIO(map_bytes)).convert("RGB")
+        map_img = ImageOps.fit(map_img, (1060, 1120), method=PILImage.Resampling.LANCZOS)
+        page.paste(map_img, (90, 350))
+    else:
+        _draw_text(draw, (620, 900), "Carte temporairement indisponible", 28, V8_MUTED, anchor="mm")
+
+    legend_y = 1490
+    legend_items = [
+        ("Entreprise contactée", "#16A34A"),
+        ("Message vocal & mail", "#06B6D4"),
+        ("Mauvais numéro", "#B91C1C"),
+        ("Déjà contactée", "#EA580C"),
+        ("Non renseigné", "#667085"),
+    ]
+    lx = 95
+    for label, color in legend_items:
+        draw.ellipse((lx, legend_y, lx + 16, legend_y + 16), fill=color)
+        _draw_text(draw, (lx + 24, legend_y - 4), label, 14, V8_MUTED)
+        lx += 210
+
+    if excluded:
+        _draw_text(
+            draw,
+            (65, 1600),
+            f"{excluded} point(s) aberrant(s) ou hors emprise exclus du cadrage.",
+            15,
+            V8_MUTED,
+        )
+    _draw_footer(draw, "Fond cartographique © contributeurs OpenStreetMap")
+    pages.append(page.convert("RGB"))
+
+    # PAGE 4 — ANALYSE TERRITORIALE
+    page, draw = _new_page()
+    _draw_header(page, draw, "Analyse territoriale")
+    epci_series = df.groupby("EPCI / CDC").size() if not df.empty else pd.Series(dtype=int)
+    commune_series = df.groupby("Commune").size() if not df.empty else pd.Series(dtype=int)
+
+    _draw_bar_chart(draw, (55, 220, 1185, 835), "Répartition par CDC / EPCI", epci_series, 10)
+    _draw_bar_chart(draw, (55, 875, 1185, 1530), "Principales communes", commune_series, 10)
+    _draw_footer(draw, "Analyse calculée à partir du périmètre filtré.")
+    pages.append(page.convert("RGB"))
+
+    # PAGE 5 — ANALYSE DES APPELS
+    page, draw = _new_page()
+    _draw_header(page, draw, "Analyse des appels")
+    contact_series = df.groupby("État du contact").size() if not df.empty else pd.Series(dtype=int)
+    theme_series = df.groupby("Thématique").size() if not df.empty else pd.Series(dtype=int)
+
+    _draw_bar_chart(draw, (55, 220, 590, 910), "État des contacts", contact_series, 8)
+    _draw_bar_chart(draw, (625, 220, 1185, 910), "Thématiques", theme_series, 8)
+    _draw_timeline(draw, (55, 950, 1185, 1550), df)
+    _draw_footer(draw, "Précaution RGPD : seules les données nécessaires à la restitution sont reprises.")
+    pages.append(page.convert("RGB"))
+
+    return pages
+
+
+def create_v8_pdf_report(df: pd.DataFrame) -> bytes:
+    pages = create_v8_report_pages(df)
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=A4)
+
+    for page in pages:
+        image_buffer = BytesIO()
+        page.save(image_buffer, format="PNG", optimize=True)
+        image_buffer.seek(0)
+
+        pdf.drawInlineImage(
+            PILImage.open(image_buffer),
+            0,
+            0,
+            width=A4[0],
+            height=A4[1],
+        )
+        pdf.showPage()
+
+    pdf.save()
+    output.seek(0)
+    return output.getvalue()
+
+
+
 def create_pdf_report(df: pd.DataFrame) -> bytes:
     """Génère un rapport CMA en format A4 portrait, dense et institutionnel."""
     buffer = BytesIO()
@@ -3392,49 +3862,29 @@ def page_report() -> None:
         )
     with export_cols[1]:
         if st.button(
-            "Préparer le rapport premium",
+            "Préparer le rapport V8",
             type="primary",
             use_container_width=True,
             key="prepare_pdf_report",
         ):
-            with st.spinner("Génération du rapport premium…"):
+            with st.spinner("Génération du rapport V8…"):
                 try:
-                    st.session_state.generated_pdf_report = (
-                        create_premium_pdf_report(filtered)
-                    )
-                    st.session_state.generated_html_report = (
-                        create_premium_html_report(filtered)
-                    )
-                    st.success("Le rapport premium est prêt.")
+                    st.session_state.generated_pdf_report = create_v8_pdf_report(filtered)
+                    st.success("Le rapport V8 est prêt.")
                 except Exception as exc:
                     st.session_state.generated_pdf_report = None
-                    st.session_state.generated_html_report = (
-                        create_premium_html_report(filtered)
-                    )
-                    st.error(
-                        "Le PDF n'a pas pu être généré, mais la version HTML "
-                        f"premium est disponible. Détail : {exc}"
-                    )
+                    st.error(f"Impossible de générer le rapport : {exc}")
 
         if st.session_state.get("generated_pdf_report"):
             st.download_button(
-                "Télécharger le rapport PDF premium",
+                "Télécharger le rapport PDF V8",
                 data=st.session_state.generated_pdf_report,
-                file_name="rapport_cellule_crise_premium.pdf",
+                file_name="rapport_cellule_crise_v8.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key="download_generated_pdf",
             )
 
-        if st.session_state.get("generated_html_report"):
-            st.download_button(
-                "Télécharger la version HTML premium",
-                data=st.session_state.generated_html_report,
-                file_name="rapport_cellule_crise_premium.html",
-                mime="text/html",
-                use_container_width=True,
-                key="download_generated_html",
-            )
 
     render_footer()
 
