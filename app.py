@@ -19,6 +19,7 @@ from reportlab.graphics.shapes import Circle, Drawing, Line, Rect, String
 from staticmap import CircleMarker, StaticMap
 from PIL import Image as PILImage, ImageDraw, ImageFont, ImageOps
 from reportlab.pdfgen import canvas
+import reportlab
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
@@ -2268,26 +2269,54 @@ V8_MUTED = "#667085"
 V8_BORDER = "#D7E0EA"
 
 
-def _font_path(bold: bool = False) -> str | None:
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        if bold
-        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
-        if bold
-        else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    ]
-    for candidate in candidates:
-        if Path(candidate).exists():
-            return candidate
-    return None
+_FONT_CACHE: dict[tuple[int, bool], ImageFont.FreeTypeFont] = {}
 
 
-def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    path = _font_path(bold)
-    if path:
-        return ImageFont.truetype(path, size=size)
-    return ImageFont.load_default()
+def _reportlab_font_path(bold: bool = False) -> Path:
+    """
+    Retourne une police TrueType disponible avec ReportLab.
+
+    ReportLab embarque Bitstream Vera :
+    - Vera.ttf pour le texte courant ;
+    - VeraBd.ttf pour le gras.
+
+    Cette méthode est fiable sur Streamlit Cloud et évite le fallback
+    ImageFont.load_default(), qui ignore les tailles demandées.
+    """
+    fonts_dir = Path(reportlab.__file__).resolve().parent / "fonts"
+    filename = "VeraBd.ttf" if bold else "Vera.ttf"
+    font_path = fonts_dir / filename
+
+    if not font_path.exists():
+        raise FileNotFoundError(
+            f"Police ReportLab introuvable : {font_path}. "
+            "Vérifiez que reportlab est correctement installé."
+        )
+
+    return font_path
+
+
+def _font(
+    size: int,
+    bold: bool = False,
+) -> ImageFont.FreeTypeFont:
+    """
+    Charge une vraie police TrueType et mémorise le résultat.
+
+    Aucun fallback vers la petite police bitmap de PIL n'est utilisé :
+    en cas de problème, une erreur explicite est remontée.
+    """
+    safe_size = max(int(size), 8)
+    cache_key = (safe_size, bold)
+
+    if cache_key not in _FONT_CACHE:
+        font_path = _reportlab_font_path(bold)
+        _FONT_CACHE[cache_key] = ImageFont.truetype(
+            str(font_path),
+            size=safe_size,
+        )
+
+    return _FONT_CACHE[cache_key]
 
 
 def _draw_text(
@@ -2540,6 +2569,9 @@ def _new_page(background: str = V8_BG) -> tuple[PILImage.Image, ImageDraw.ImageD
 
 
 def create_v8_report_pages(df: pd.DataFrame) -> list[PILImage.Image]:
+    # Validation immédiate du moteur typographique.
+    _font(20, False)
+    _font(20, True)
     metrics = report_metrics(df)
     state_counts = contact_state_counts(df)
     progress_rate = contact_progress_rate(df)
@@ -3862,24 +3894,24 @@ def page_report() -> None:
         )
     with export_cols[1]:
         if st.button(
-            "Préparer le rapport V8",
+            "Préparer le rapport V9",
             type="primary",
             use_container_width=True,
             key="prepare_pdf_report",
         ):
-            with st.spinner("Génération du rapport V8…"):
+            with st.spinner("Génération du rapport V9…"):
                 try:
                     st.session_state.generated_pdf_report = create_v8_pdf_report(filtered)
-                    st.success("Le rapport V8 est prêt.")
+                    st.success("Le rapport V9 est prêt.")
                 except Exception as exc:
                     st.session_state.generated_pdf_report = None
                     st.error(f"Impossible de générer le rapport : {exc}")
 
         if st.session_state.get("generated_pdf_report"):
             st.download_button(
-                "Télécharger le rapport PDF V8",
+                "Télécharger le rapport PDF V9",
                 data=st.session_state.generated_pdf_report,
-                file_name="rapport_cellule_crise_v8.pdf",
+                file_name="rapport_cellule_crise_v9.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key="download_generated_pdf",
