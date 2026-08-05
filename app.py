@@ -7,19 +7,18 @@ import html
 import re
 import unicodedata
 
-import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
 import pydeck as pdk
 import requests
 import streamlit as st
+from reportlab.graphics.shapes import Circle, Drawing, Line, Rect, String
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import (
-    Image,
     PageBreak,
     Paragraph,
     SimpleDocTemplate,
@@ -1376,103 +1375,188 @@ def report_metrics(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def create_report_map_png(df: pd.DataFrame) -> bytes:
+def create_report_map_drawing(df: pd.DataFrame) -> Drawing:
     """
-    Produit une carte statique intégrable au PDF.
-    Elle utilise les coordonnées réellement géocodées et reprend les couleurs
-    des états de contact. La vue s'adapte automatiquement aux filtres.
+    Produit une carte vectorielle directement avec ReportLab.
+    Aucun module graphique supplémentaire n'est requis.
+
+    Il s'agit d'une représentation géographique des coordonnées géocodées,
+    avec une emprise adaptée aux filtres actifs. Les communes sont indiquées
+    comme repères et les points reprennent les couleurs des états de contact.
     """
-    valid = df.dropna(subset=["Latitude", "Longitude"]).copy()
+    width = 25.2 * cm
+    height = 14.8 * cm
+    drawing = Drawing(width, height)
 
-    fig, ax = plt.subplots(figsize=(11.2, 7.0), dpi=170)
-    ax.set_facecolor("#F2F4F7")
-    fig.patch.set_facecolor("white")
-
-    if valid.empty:
-        ax.text(
-            0.5,
-            0.5,
-            "Aucune entreprise géolocalisée pour les filtres sélectionnés",
-            ha="center",
-            va="center",
-            fontsize=14,
-            color="#667085",
-            transform=ax.transAxes,
+    # Fond et cadre
+    drawing.add(
+        Rect(
+            0,
+            0,
+            width,
+            height,
+            fillColor=colors.HexColor("#F2F4F7"),
+            strokeColor=colors.HexColor("#D0D5DD"),
+            strokeWidth=0.8,
         )
-        ax.set_axis_off()
-    else:
-        for state in CONTACT_STATES:
-            subset = valid[valid["État du contact"] == state]
-            if subset.empty:
-                continue
-
-            color = CONTACT_STATE_HEX.get(state, "#667085")
-            ax.scatter(
-                subset["Longitude"],
-                subset["Latitude"],
-                s=48,
-                c=color,
-                edgecolors="white",
-                linewidths=0.8,
-                alpha=0.90,
-                label=state,
-                zorder=3,
-            )
-
-        # Position moyenne de chaque commune afin d'apporter un repère territorial.
-        commune_centers = (
-            valid.groupby("Commune")[["Longitude", "Latitude"]]
-            .mean()
-            .reset_index()
-        )
-        for _, row in commune_centers.iterrows():
-            ax.annotate(
-                str(row["Commune"]),
-                (row["Longitude"], row["Latitude"]),
-                xytext=(4, 5),
-                textcoords="offset points",
-                fontsize=7.5,
-                color="#344054",
-                zorder=4,
-            )
-
-        lon_min = float(valid["Longitude"].min())
-        lon_max = float(valid["Longitude"].max())
-        lat_min = float(valid["Latitude"].min())
-        lat_max = float(valid["Latitude"].max())
-
-        lon_margin = max((lon_max - lon_min) * 0.10, 0.015)
-        lat_margin = max((lat_max - lat_min) * 0.10, 0.015)
-
-        ax.set_xlim(lon_min - lon_margin, lon_max + lon_margin)
-        ax.set_ylim(lat_min - lat_margin, lat_max + lat_margin)
-        ax.grid(color="#D0D5DD", linewidth=0.55, alpha=0.7)
-        ax.tick_params(labelsize=7, colors="#667085")
-        ax.set_xlabel("Longitude", fontsize=8, color="#667085")
-        ax.set_ylabel("Latitude", fontsize=8, color="#667085")
-        ax.legend(
-            loc="best",
-            fontsize=7,
-            frameon=True,
-            facecolor="white",
-            edgecolor="#D0D5DD",
-        )
-
-    ax.set_title(
-        "Cartographie des entreprises appelées - périmètre filtré",
-        loc="left",
-        fontsize=15,
-        fontweight="bold",
-        color="#172033",
-        pad=14,
     )
 
-    buffer = BytesIO()
-    fig.tight_layout()
-    fig.savefig(buffer, format="png", bbox_inches="tight")
-    plt.close(fig)
-    buffer.seek(0)
-    return buffer.getvalue()
+    title = "Cartographie des entreprises appelées — périmètre filtré"
+    drawing.add(
+        String(
+            14,
+            height - 22,
+            title,
+            fontName="Helvetica-Bold",
+            fontSize=12,
+            fillColor=colors.HexColor("#172033"),
+        )
+    )
+
+    valid = df.dropna(subset=["Latitude", "Longitude"]).copy()
+
+    if valid.empty:
+        drawing.add(
+            String(
+                width / 2,
+                height / 2,
+                "Aucune entreprise géolocalisée pour les filtres sélectionnés",
+                fontName="Helvetica",
+                fontSize=11,
+                textAnchor="middle",
+                fillColor=colors.HexColor("#667085"),
+            )
+        )
+        return drawing
+
+    plot_left = 32
+    plot_bottom = 30
+    plot_right = width - 18
+    plot_top = height - 42
+    plot_width = plot_right - plot_left
+    plot_height = plot_top - plot_bottom
+
+    lon_min = float(valid["Longitude"].min())
+    lon_max = float(valid["Longitude"].max())
+    lat_min = float(valid["Latitude"].min())
+    lat_max = float(valid["Latitude"].max())
+
+    # Éviter une division par zéro sur un périmètre très restreint.
+    if abs(lon_max - lon_min) < 0.002:
+        lon_min -= 0.01
+        lon_max += 0.01
+    if abs(lat_max - lat_min) < 0.002:
+        lat_min -= 0.01
+        lat_max += 0.01
+
+    lon_margin = max((lon_max - lon_min) * 0.08, 0.006)
+    lat_margin = max((lat_max - lat_min) * 0.08, 0.006)
+    lon_min -= lon_margin
+    lon_max += lon_margin
+    lat_min -= lat_margin
+    lat_max += lat_margin
+
+    def project(longitude: float, latitude: float) -> tuple[float, float]:
+        x = plot_left + ((longitude - lon_min) / (lon_max - lon_min)) * plot_width
+        y = plot_bottom + ((latitude - lat_min) / (lat_max - lat_min)) * plot_height
+        return x, y
+
+    # Grille légère
+    for step in range(1, 5):
+        x = plot_left + plot_width * step / 5
+        y = plot_bottom + plot_height * step / 5
+        drawing.add(
+            Line(
+                x,
+                plot_bottom,
+                x,
+                plot_top,
+                strokeColor=colors.HexColor("#D0D5DD"),
+                strokeWidth=0.35,
+            )
+        )
+        drawing.add(
+            Line(
+                plot_left,
+                y,
+                plot_right,
+                y,
+                strokeColor=colors.HexColor("#D0D5DD"),
+                strokeWidth=0.35,
+            )
+        )
+
+    # Repères communaux
+    commune_centers = (
+        valid.groupby("Commune")[["Longitude", "Latitude"]]
+        .mean()
+        .reset_index()
+    )
+    for _, row in commune_centers.iterrows():
+        x, y = project(float(row["Longitude"]), float(row["Latitude"]))
+        drawing.add(
+            String(
+                x + 4,
+                y + 5,
+                str(row["Commune"])[:30],
+                fontName="Helvetica",
+                fontSize=6.2,
+                fillColor=colors.HexColor("#475467"),
+            )
+        )
+
+    # Points
+    for _, row in valid.iterrows():
+        x, y = project(float(row["Longitude"]), float(row["Latitude"]))
+        state = str(row.get("État du contact", "Non renseigné"))
+        hex_color = CONTACT_STATE_HEX.get(state, "#667085")
+
+        drawing.add(
+            Circle(
+                x,
+                y,
+                3.6,
+                fillColor=colors.HexColor(hex_color),
+                strokeColor=colors.white,
+                strokeWidth=0.7,
+            )
+        )
+
+    # Légende
+    legend_x = plot_left
+    legend_y = 12
+    for index, state in enumerate(
+        [
+            s
+            for s in CONTACT_STATES
+            if s in set(valid["État du contact"].dropna().unique())
+        ]
+    ):
+        x = legend_x + index * 115
+        drawing.add(
+            Circle(
+                x,
+                legend_y,
+                3,
+                fillColor=colors.HexColor(
+                    CONTACT_STATE_HEX.get(state, "#667085")
+                ),
+                strokeColor=colors.white,
+                strokeWidth=0.5,
+            )
+        )
+        drawing.add(
+            String(
+                x + 6,
+                legend_y - 2,
+                state[:24],
+                fontName="Helvetica",
+                fontSize=5.8,
+                fillColor=colors.HexColor("#475467"),
+            )
+        )
+
+    return drawing
 
 
 def report_scope_text(df: pd.DataFrame) -> str:
@@ -1552,18 +1636,69 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
     progress_rate = contact_progress_rate(df)
 
     story = [
-        Paragraph("Rapport de la cellule de crise", styles["ReportTitle"]),
+        Spacer(1, 1.2 * cm),
+        Paragraph("RAPPORT CELLULE DE CRISE", styles["ReportTitle"]),
+        Spacer(1, 0.2 * cm),
         Paragraph(
             "Cartographie et bilan des entreprises appelées",
-            styles["Heading3"],
+            ParagraphStyle(
+                name="CoverSubtitle",
+                parent=styles["Heading2"],
+                fontName="Helvetica",
+                fontSize=15,
+                leading=18,
+                textColor=colors.HexColor("#475467"),
+                alignment=TA_CENTER,
+            ),
         ),
-        Spacer(1, 0.15 * cm),
+        Spacer(1, 0.7 * cm),
+        Table(
+            [
+                [
+                    Paragraph(
+                        "<b>CMA Nouvelle-Aquitaine</b>",
+                        ParagraphStyle(
+                            name="CoverCMA",
+                            parent=styles["BodyText"],
+                            fontName="Helvetica-Bold",
+                            fontSize=14,
+                            textColor=colors.white,
+                            alignment=TA_CENTER,
+                        ),
+                    )
+                ]
+            ],
+            colWidths=[11 * cm],
+            rowHeights=[1.25 * cm],
+            style=TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(CMA_RED)),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("BOX", (0, 0), (-1, -1), 0, colors.HexColor(CMA_RED)),
+                ]
+            ),
+            hAlign="CENTER",
+        ),
+        Spacer(1, 1.0 * cm),
         Paragraph(report_scope_text(df), styles["BodyText"]),
+        Spacer(1, 0.25 * cm),
         Paragraph(
             f"Rapport généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}",
             styles["SmallMuted"],
         ),
-        Spacer(1, 0.35 * cm),
+        Spacer(1, 1.0 * cm),
+        Paragraph(
+            "Ce rapport reprend exactement les filtres actifs au moment de sa génération.",
+            ParagraphStyle(
+                name="CoverNote",
+                parent=styles["BodyText"],
+                fontSize=10,
+                leading=14,
+                textColor=colors.HexColor("#667085"),
+                alignment=TA_CENTER,
+            ),
+        ),
+        PageBreak(),
     ]
 
     metric_data = [
@@ -1607,10 +1742,8 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
     )
     story.extend([metric_table, Spacer(1, 0.35 * cm)])
 
-    # Carte filtrée intégrée dans le PDF.
-    map_bytes = create_report_map_png(df)
-    map_buffer = BytesIO(map_bytes)
-    story.append(Image(map_buffer, width=25.2 * cm, height=14.9 * cm))
+    # Carte filtrée intégrée directement dans le PDF, sans matplotlib.
+    story.append(create_report_map_drawing(df))
     story.append(PageBreak())
 
     story.append(Paragraph("Répartition des appels", styles["SectionTitleCMA"]))
@@ -1690,6 +1823,91 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
             styles["SmallMuted"],
         )
     )
+
+    story.append(PageBreak())
+    story.append(
+        Paragraph(
+            "Liste synthétique des entreprises du périmètre",
+            styles["SectionTitleCMA"],
+        )
+    )
+
+    if df.empty:
+        story.append(Paragraph("Aucune entreprise dans ce périmètre.", styles["BodyText"]))
+    else:
+        company_rows = [
+            [
+                "Entreprise",
+                "Commune",
+                "CDC / EPCI",
+                "Date",
+                "État du contact",
+            ]
+        ]
+
+        ordered = df.sort_values(
+            ["EPCI / CDC", "Commune", "Nom de l'entreprise"],
+            na_position="last",
+        ).head(120)
+
+        for _, row in ordered.iterrows():
+            call_date = pd.to_datetime(
+                row.get("Date de l'appel"),
+                errors="coerce",
+            )
+            date_text = (
+                call_date.strftime("%d/%m/%Y")
+                if not pd.isna(call_date)
+                else ""
+            )
+            company_rows.append(
+                [
+                    safe_tooltip_text(row.get("Nom de l'entreprise", ""), 45),
+                    safe_tooltip_text(row.get("Commune", ""), 24),
+                    safe_tooltip_text(row.get("EPCI / CDC", ""), 35),
+                    date_text,
+                    safe_tooltip_text(row.get("État du contact", ""), 30),
+                ]
+            )
+
+        company_table = Table(
+            company_rows,
+            colWidths=[6.2 * cm, 3.4 * cm, 5.6 * cm, 2.6 * cm, 5.4 * cm],
+            repeatRows=1,
+        )
+        company_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#172033")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 7),
+                    ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#D0D5DD")),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [
+                        colors.white,
+                        colors.HexColor("#F9FAFB"),
+                    ]),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ]
+            )
+        )
+        story.append(company_table)
+
+        if len(df) > 120:
+            story.append(
+                Spacer(1, 0.2 * cm)
+            )
+            story.append(
+                Paragraph(
+                    f"La liste PDF est limitée aux 120 premières lignes sur {len(df)}. "
+                    "L'export Excel contient l'intégralité des données.",
+                    styles["SmallMuted"],
+                )
+            )
 
     doc.build(story)
     buffer.seek(0)
