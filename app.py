@@ -1824,11 +1824,10 @@ def report_scope_text(df: pd.DataFrame) -> str:
 
 
 def generate_report_remarks(df: pd.DataFrame) -> list[str]:
-    """Génère des remarques factuelles à partir du périmètre filtré."""
+    """Produit des constats synthétiques adaptés à un rapport de direction."""
     if df.empty:
         return ["Aucune entreprise ne correspond aux critères sélectionnés."]
 
-    remarks: list[str] = []
     total = len(df)
     state_counts = contact_state_counts(df)
     progress = contact_progress_rate(df)
@@ -1841,31 +1840,32 @@ def generate_report_remarks(df: pd.DataFrame) -> list[str]:
     contacted_rate = round(contacted / total * 100, 1) if total else 0
     follow_up_rate = round(vocal_mail / total * 100, 1) if total else 0
 
-    remarks.append(
-        f"La campagne porte sur {total} entreprise(s), avec un taux d'avancement "
-        f"estimé à {progress} %."
-    )
-    remarks.append(
-        f"{contacted} entreprise(s) ont été directement contactée(s), "
-        f"soit {contacted_rate} % du périmètre."
-    )
+    remarks: list[str] = [
+        (
+            f"{total} entreprise(s) figurent dans le périmètre analysé ; "
+            f"le taux d'avancement de la campagne atteint {progress} %."
+        ),
+        (
+            f"{contacted} entreprise(s) ont été directement contactée(s), "
+            f"soit {contacted_rate} % du périmètre."
+        ),
+    ]
 
     if vocal_mail:
         remarks.append(
             f"{vocal_mail} entreprise(s) ont reçu un message vocal et un courriel "
-            f"({follow_up_rate} %) ; ces situations constituent le principal volume "
-            "de suivi potentiel."
+            f"({follow_up_rate} %) et peuvent nécessiter une relance."
         )
 
     if wrong_numbers:
         remarks.append(
-            f"{wrong_numbers} numéro(s) sont identifié(s) comme erroné(s) et "
-            "nécessitent, lorsque cela est possible, une mise à jour des coordonnées."
+            f"{wrong_numbers} numéro(s) erroné(s) restent à corriger lorsque "
+            "d'autres coordonnées sont disponibles."
         )
 
     if already_contacted:
         remarks.append(
-            f"{already_contacted} entreprise(s) avaient déjà été contactée(s) "
+            f"{already_contacted} entreprise(s) avaient déjà été prises en charge "
             "par un autre interlocuteur."
         )
 
@@ -1874,7 +1874,7 @@ def generate_report_remarks(df: pd.DataFrame) -> list[str]:
         top_epci = str(epci_counts.index[0])
         top_epci_count = int(epci_counts.iloc[0])
         remarks.append(
-            f"Le territoire le plus représenté est {top_epci}, avec "
+            f"{top_epci} concentre le volume principal, avec "
             f"{top_epci_count} entreprise(s)."
         )
 
@@ -1883,7 +1883,7 @@ def generate_report_remarks(df: pd.DataFrame) -> list[str]:
         top_commune = str(commune_counts.index[0])
         top_commune_count = int(commune_counts.iloc[0])
         remarks.append(
-            f"La commune concentrant le plus d'appels est {top_commune} "
+            f"{top_commune} est la commune la plus représentée "
             f"({top_commune_count} entreprise(s))."
         )
 
@@ -1891,10 +1891,17 @@ def generate_report_remarks(df: pd.DataFrame) -> list[str]:
         theme_counts = df["Thématique"].value_counts()
         top_theme = str(theme_counts.index[0])
         top_theme_count = int(theme_counts.iloc[0])
-        remarks.append(
-            f"La thématique la plus fréquente dans les commentaires est "
-            f"« {top_theme} » ({top_theme_count} occurrence(s))."
-        )
+
+        if top_theme != "Autre":
+            remarks.append(
+                f"La thématique dominante est « {top_theme} » "
+                f"({top_theme_count} occurrence(s))."
+            )
+        else:
+            remarks.append(
+                f"{top_theme_count} commentaire(s) restent classés dans "
+                "« Autre » ; un reclassement peut améliorer l'analyse qualitative."
+            )
 
     dates = pd.to_datetime(df["Date de l'appel"], errors="coerce").dropna()
     if not dates.empty and dates.dt.date.nunique() > 1:
@@ -1902,851 +1909,11 @@ def generate_report_remarks(df: pd.DataFrame) -> list[str]:
         busiest_day = pd.Timestamp(daily_counts.index[0]).strftime("%d/%m/%Y")
         busiest_count = int(daily_counts.iloc[0])
         remarks.append(
-            f"Le pic d'activité a été enregistré le {busiest_day}, "
+            f"Le pic d'activité est intervenu le {busiest_day}, "
             f"avec {busiest_count} appel(s)."
         )
 
-    return remarks[:8]
-
-
-
-def _html_escape(value: Any) -> str:
-    return html.escape("" if value is None else str(value))
-
-
-def _html_horizontal_bars(
-    series: pd.Series,
-    title: str,
-    max_items: int = 8,
-    bar_color: str = "#E31B23",
-) -> str:
-    clean = series.dropna().sort_values(ascending=False).head(max_items)
-
-    if clean.empty:
-        return (
-            '<section class="chart-card">'
-            f'<h3>{_html_escape(title)}</h3>'
-            '<div class="empty-state">Aucune donnée</div>'
-            '</section>'
-        )
-
-    max_value = max(float(clean.max()), 1.0)
-    rows = []
-
-    for label, value in clean.items():
-        percentage = max(3.0, float(value) / max_value * 100.0)
-        rows.append(
-            '<div class="bar-row">'
-            f'<div class="bar-label">{_html_escape(label)}</div>'
-            '<div class="bar-track">'
-            f'<div class="bar-fill" style="width:{percentage:.2f}%;background:{bar_color};"></div>'
-            '</div>'
-            f'<div class="bar-value">{int(value)}</div>'
-            '</div>'
-        )
-
-    return (
-        '<section class="chart-card">'
-        f'<h3>{_html_escape(title)}</h3>'
-        '<div class="bar-chart">'
-        + "".join(rows)
-        + "</div></section>"
-    )
-
-
-def _html_daily_calls(df: pd.DataFrame) -> str:
-    dates = pd.to_datetime(df["Date de l'appel"], errors="coerce").dropna()
-
-    if dates.empty:
-        return (
-            '<section class="chart-card timeline-card">'
-            '<h3>Évolution quotidienne des appels</h3>'
-            '<div class="empty-state">Aucune date exploitable</div>'
-            '</section>'
-        )
-
-    daily = dates.dt.date.value_counts().sort_index()
-    if len(daily) > 30:
-        daily = daily.tail(30)
-
-    max_value = max(int(daily.max()), 1)
-    columns = []
-
-    for day, value in daily.items():
-        height = max(8.0, float(value) / max_value * 100.0)
-        columns.append(
-            '<div class="timeline-column">'
-            f'<div class="timeline-value">{int(value)}</div>'
-            '<div class="timeline-bar-wrap">'
-            f'<div class="timeline-bar" style="height:{height:.2f}%;"></div>'
-            '</div>'
-            f'<div class="timeline-date">{pd.Timestamp(day).strftime("%d/%m")}</div>'
-            '</div>'
-        )
-
-    return (
-        '<section class="chart-card timeline-card">'
-        '<h3>Évolution quotidienne des appels</h3>'
-        '<div class="timeline-chart">'
-        + "".join(columns)
-        + "</div></section>"
-    )
-
-
-def _map_data_uri(df: pd.DataFrame) -> tuple[str | None, int]:
-    map_bytes, excluded_points = create_osm_report_map(df)
-    if map_bytes is None:
-        return None, excluded_points
-
-    encoded = base64.b64encode(map_bytes).decode("ascii")
-    return f"data:image/png;base64,{encoded}", excluded_points
-
-
-def create_premium_html_report(df: pd.DataFrame) -> bytes:
-    metrics = report_metrics(df)
-    state_counts = contact_state_counts(df)
-    progress_rate = contact_progress_rate(df)
-    remarks = generate_report_remarks(df)
-
-    epci_series = (
-        df.groupby("EPCI / CDC").size()
-        if not df.empty
-        else pd.Series(dtype=int)
-    )
-    commune_series = (
-        df.groupby("Commune").size()
-        if not df.empty
-        else pd.Series(dtype=int)
-    )
-    contact_series = (
-        df.groupby("État du contact").size()
-        if not df.empty
-        else pd.Series(dtype=int)
-    )
-    theme_series = (
-        df.groupby("Thématique").size()
-        if not df.empty
-        else pd.Series(dtype=int)
-    )
-
-    map_uri, excluded_points = _map_data_uri(df)
-    export_date = datetime.now().strftime("%d/%m/%Y à %H:%M")
-
-    kpis = [
-        ("Entreprises appelées", metrics["total"], "Périmètre filtré"),
-        ("Contactées", state_counts["Entreprise contactée"], "Échange direct"),
-        (
-            "Message vocal & mail",
-            state_counts["Message vocal & mail envoyé"],
-            "Suivi potentiel",
-        ),
-        (
-            "Mauvais numéros",
-            state_counts["Mauvais numéro"],
-            "Coordonnées à corriger",
-        ),
-        (
-            "Déjà contactées",
-            state_counts["Déjà contactée"],
-            "Prise en charge existante",
-        ),
-        ("Avancement", f"{progress_rate} %", "Traitements finalisés"),
-    ]
-
-    kpi_html = "".join(
-        '<article class="kpi-card">'
-        f'<div class="kpi-label">{_html_escape(label)}</div>'
-        f'<div class="kpi-value">{_html_escape(value)}</div>'
-        f'<div class="kpi-detail">{_html_escape(detail)}</div>'
-        "</article>"
-        for label, value, detail in kpis
-    )
-
-    remarks_html = "".join(
-        f"<li>{_html_escape(remark)}</li>"
-        for remark in remarks
-    )
-
-    map_html = (
-        f'<img class="report-map" src="{map_uri}" alt="Cartographie du périmètre">'
-        if map_uri
-        else '<div class="map-placeholder">Carte temporairement indisponible</div>'
-    )
-
-    excluded_note = (
-        f'<p class="small-note">{excluded_points} point(s) aberrant(s) ou hors emprise '
-        "ont été exclus du cadrage.</p>"
-        if excluded_points
-        else ""
-    )
-
-    html_report = f'''<!doctype html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<title>Rapport cellule de crise CMA</title>
-<style>
-@page {{ size: A4 portrait; margin: 0; }}
-* {{ box-sizing: border-box; }}
-body {{ margin:0; font-family:Arial,Helvetica,sans-serif; color:#173A63; background:#E9EEF4; }}
-.page {{ position:relative; width:210mm; min-height:297mm; padding:12mm 14mm 14mm; background:#F2F5F8; page-break-after:always; overflow:hidden; }}
-.page:last-child {{ page-break-after:auto; }}
-.page-header {{ display:table; width:100%; border-top:5px solid #E31B23; background:#173A63; color:#fff; padding:8mm 10mm; }}
-.page-header-left,.page-header-right {{ display:table-cell; vertical-align:middle; }}
-.page-header-left {{ width:62%; }}
-.page-header-right {{ width:38%; text-align:right; }}
-.header-title {{ font-size:12px; font-weight:700; letter-spacing:.04em; }}
-.logo-box {{ display:inline-block; background:#fff; padding:5px 9px; border-radius:8px; border:1px solid #D0D5DD; }}
-.logo-box img {{ width:58mm; height:auto; }}
-.cover {{ padding:0; background:#173A63; color:#fff; }}
-.cover .cover-inner {{ min-height:297mm; padding:0 15mm 16mm; border-top:7px solid #E31B23; }}
-.cover-top {{ display:table; width:100%; padding-top:16mm; }}
-.cover-brand,.cover-logo {{ display:table-cell; vertical-align:middle; }}
-.cover-brand {{ width:58%; font-size:13px; font-weight:700; }}
-.cover-logo {{ width:42%; text-align:right; }}
-.cover-logo .logo-box img {{ width:63mm; }}
-.cover-title {{ margin-top:36mm; font-size:37px; line-height:1.05; font-weight:700; }}
-.cover-title .red {{ display:block; margin-top:5px; color:#FF3038; }}
-.cover-subtitle {{ margin-top:14px; font-size:16px; line-height:1.45; }}
-.cover-panel {{ margin-top:32mm; padding:12mm; background:#2C527E; border-radius:14px; }}
-.cover-panel-title {{ margin-bottom:8px; font-size:12px; font-weight:700; letter-spacing:.06em; }}
-.cover-panel-text {{ font-size:11px; line-height:1.55; }}
-.section-heading {{ margin:0 0 8mm; padding:4mm 6mm; background:#173A63; color:#fff; border-left:6px solid #E31B23; font-size:18px; }}
-.section-intro {{ margin:-3mm 0 7mm; color:#667085; font-size:10px; }}
-.kpi-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:5mm; }}
-.kpi-card {{ padding:7mm 5mm; background:#fff; border:1px solid #DCE3EA; border-top:5px solid #E31B23; border-radius:10px; }}
-.kpi-label {{ min-height:11mm; color:#667085; font-size:10px; font-weight:700; }}
-.kpi-value {{ margin:5px 0; color:#173A63; font-size:27px; font-weight:700; }}
-.kpi-detail {{ color:#98A2B3; font-size:8px; }}
-.analysis-box {{ margin-top:8mm; padding:7mm 8mm; background:#E6EEF7; border:1px solid #B9CCE0; border-left:6px solid #E31B23; border-radius:10px; }}
-.analysis-box h3 {{ margin:0 0 4mm; font-size:14px; }}
-.analysis-box ul {{ margin:0; padding-left:6mm; }}
-.analysis-box li {{ margin-bottom:3mm; font-size:10px; line-height:1.35; }}
-.map-shell {{ padding:6mm; background:#fff; border:1px solid #DCE3EA; border-radius:12px; }}
-.report-map {{ display:block; width:100%; height:auto; border-radius:8px; }}
-.map-placeholder {{ height:155mm; padding-top:70mm; text-align:center; color:#667085; background:#E9EEF4; }}
-.legend {{ margin-top:5mm; text-align:center; }}
-.legend span {{ display:inline-block; margin:0 3mm 2mm; font-size:8px; }}
-.legend-dot {{ display:inline-block; width:8px; height:8px; margin-right:3px; border-radius:50%; }}
-.chart-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:5mm; }}
-.chart-card {{ padding:5mm; background:#fff; border:1px solid #DCE3EA; border-radius:10px; }}
-.chart-card h3 {{ margin:-5mm -5mm 5mm; padding:4mm 5mm; background:#173A63; color:#fff; border-top:4px solid #E31B23; font-size:12px; }}
-.bar-row {{ display:grid; grid-template-columns:38% 52% 10%; align-items:center; margin-bottom:3.5mm; }}
-.bar-label {{ padding-right:3mm; color:#344054; font-size:8px; }}
-.bar-track {{ height:6px; background:#EDF1F5; }}
-.bar-fill {{ height:6px; }}
-.bar-value {{ padding-left:2mm; font-size:8px; font-weight:700; }}
-.timeline-card {{ margin-top:7mm; }}
-.timeline-chart {{ display:flex; align-items:flex-end; height:65mm; }}
-.timeline-column {{ flex:1; text-align:center; }}
-.timeline-value {{ height:7mm; font-size:7px; font-weight:700; }}
-.timeline-bar-wrap {{ position:relative; height:48mm; margin:0 2px; background:#F2F4F7; }}
-.timeline-bar {{ position:absolute; bottom:0; left:22%; width:56%; background:#E31B23; }}
-.timeline-date {{ margin-top:2mm; font-size:6px; color:#667085; }}
-.small-note {{ margin-top:3mm; color:#667085; font-size:7px; }}
-.page-footer {{ position:absolute; left:14mm; right:14mm; bottom:7mm; padding-top:3mm; border-top:1px solid #CBD5E1; color:#667085; font-size:7px; }}
-</style>
-</head>
-<body>
-
-<section class="page cover">
-<div class="cover-inner">
-<div class="cover-top">
-<div class="cover-brand">CMA NOUVELLE-AQUITAINE · GIRONDE</div>
-<div class="cover-logo"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
-</div>
-<div class="cover-title">Rapport cellule de crise<span class="red">Entreprises appelées</span></div>
-<div class="cover-subtitle">Cartographie, suivi territorial et analyse des appels</div>
-<div class="cover-panel">
-<div class="cover-panel-title">PÉRIMÈTRE DU RAPPORT</div>
-<div class="cover-panel-text">{_html_escape(report_scope_text(df))}<br>Date de l'export : {_html_escape(export_date)}</div>
-</div>
-</div>
-</section>
-
-<section class="page">
-<div class="page-header">
-<div class="page-header-left"><div class="header-title">CMA NOUVELLE-AQUITAINE · GIRONDE</div></div>
-<div class="page-header-right"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
-</div>
-<h1 class="section-heading">Tableau de bord</h1>
-<p class="section-intro">Synthèse du périmètre sélectionné au moment de l'export.</p>
-<div class="kpi-grid">{kpi_html}</div>
-<div class="analysis-box"><h3>Remarques principales</h3><ul>{remarks_html}</ul></div>
-<div class="page-footer">Rapport généré le {_html_escape(export_date)} · Données filtrées · Usage cellule de crise</div>
-</section>
-
-<section class="page">
-<div class="page-header">
-<div class="page-header-left"><div class="header-title">CARTOGRAPHIE DU PÉRIMÈTRE</div></div>
-<div class="page-header-right"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
-</div>
-<h1 class="section-heading">Cartographie des entreprises appelées</h1>
-<p class="section-intro">{_html_escape(report_scope_text(df))}</p>
-<div class="map-shell">{map_html}</div>
-<div class="legend">
-<span><i class="legend-dot" style="background:#16A34A;"></i>Entreprise contactée</span>
-<span><i class="legend-dot" style="background:#06B6D4;"></i>Message vocal & mail</span>
-<span><i class="legend-dot" style="background:#B91C1C;"></i>Mauvais numéro</span>
-<span><i class="legend-dot" style="background:#EA580C;"></i>Déjà contactée</span>
-<span><i class="legend-dot" style="background:#667085;"></i>Non renseigné</span>
-</div>
-{excluded_note}
-<div class="page-footer">Fond cartographique © contributeurs OpenStreetMap</div>
-</section>
-
-<section class="page">
-<div class="page-header">
-<div class="page-header-left"><div class="header-title">ANALYSE TERRITORIALE</div></div>
-<div class="page-header-right"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
-</div>
-<h1 class="section-heading">Répartition géographique</h1>
-<div class="chart-grid">
-{_html_horizontal_bars(epci_series, "Répartition par CDC / EPCI", 10)}
-{_html_horizontal_bars(commune_series, "Principales communes", 10)}
-</div>
-<div class="page-footer">Analyse calculée à partir des entreprises correspondant aux filtres actifs.</div>
-</section>
-
-<section class="page">
-<div class="page-header">
-<div class="page-header-left"><div class="header-title">ANALYSE DES APPELS</div></div>
-<div class="page-header-right"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
-</div>
-<h1 class="section-heading">Suivi de la campagne</h1>
-<div class="chart-grid">
-{_html_horizontal_bars(contact_series, "État des contacts", 8)}
-{_html_horizontal_bars(theme_series, "Thématiques des commentaires", 8)}
-</div>
-{_html_daily_calls(df)}
-<div class="page-footer">Précaution RGPD : seules les données nécessaires à la restitution sont reprises.</div>
-</section>
-
-</body>
-</html>'''
-
-    return html_report.encode("utf-8")
-
-
-def create_premium_pdf_report(df: pd.DataFrame) -> bytes:
-    if pisa is None:
-        raise RuntimeError(
-            "Le moteur PDF xhtml2pdf n'est pas installé. "
-            "Vérifiez le fichier requirements.txt."
-        )
-
-    html_bytes = create_premium_html_report(df)
-    output = BytesIO()
-
-    result = pisa.CreatePDF(
-        src=html_bytes.decode("utf-8"),
-        dest=output,
-        encoding="utf-8",
-    )
-
-    if result.err:
-        raise RuntimeError(
-            "La conversion du rapport HTML en PDF a échoué."
-        )
-
-    output.seek(0)
-    return output.getvalue()
-
-
-
-# ============================================================
-# RAPPORT V8 — MOTEUR IMAGE ROBUSTE
-# ============================================================
-
-V8_PAGE_SIZE = (1240, 1754)  # A4 portrait à ~150 dpi
-V8_NAVY = "#173A63"
-V8_BLUE = "#2C527E"
-V8_RED = "#E31B23"
-V8_BG = "#EEF2F6"
-V8_CARD = "#FFFFFF"
-V8_TEXT = "#173A63"
-V8_MUTED = "#667085"
-V8_BORDER = "#D7E0EA"
-
-
-_FONT_CACHE: dict[tuple[int, bool], ImageFont.FreeTypeFont] = {}
-
-
-def _reportlab_font_path(bold: bool = False) -> Path:
-    """
-    Retourne une police TrueType disponible avec ReportLab.
-
-    ReportLab embarque Bitstream Vera :
-    - Vera.ttf pour le texte courant ;
-    - VeraBd.ttf pour le gras.
-
-    Cette méthode est fiable sur Streamlit Cloud et évite le fallback
-    ImageFont.load_default(), qui ignore les tailles demandées.
-    """
-    fonts_dir = Path(reportlab.__file__).resolve().parent / "fonts"
-    filename = "VeraBd.ttf" if bold else "Vera.ttf"
-    font_path = fonts_dir / filename
-
-    if not font_path.exists():
-        raise FileNotFoundError(
-            f"Police ReportLab introuvable : {font_path}. "
-            "Vérifiez que reportlab est correctement installé."
-        )
-
-    return font_path
-
-
-def _font(
-    size: int,
-    bold: bool = False,
-) -> ImageFont.FreeTypeFont:
-    """
-    Charge une vraie police TrueType et mémorise le résultat.
-
-    Aucun fallback vers la petite police bitmap de PIL n'est utilisé :
-    en cas de problème, une erreur explicite est remontée.
-    """
-    safe_size = max(int(size), 8)
-    cache_key = (safe_size, bold)
-
-    if cache_key not in _FONT_CACHE:
-        font_path = _reportlab_font_path(bold)
-        _FONT_CACHE[cache_key] = ImageFont.truetype(
-            str(font_path),
-            size=safe_size,
-        )
-
-    return _FONT_CACHE[cache_key]
-
-
-def _draw_text(
-    draw: ImageDraw.ImageDraw,
-    xy: tuple[int, int],
-    text: str,
-    size: int,
-    fill: str,
-    bold: bool = False,
-    anchor: str | None = None,
-) -> None:
-    draw.text(
-        xy,
-        str(text),
-        font=_font(size, bold),
-        fill=fill,
-        anchor=anchor,
-    )
-
-
-def _rounded_card(
-    draw: ImageDraw.ImageDraw,
-    box: tuple[int, int, int, int],
-    fill: str = V8_CARD,
-    outline: str = V8_BORDER,
-    radius: int = 22,
-    width: int = 2,
-) -> None:
-    draw.rounded_rectangle(
-        box,
-        radius=radius,
-        fill=fill,
-        outline=outline,
-        width=width,
-    )
-
-
-def _load_logo_image(max_width: int = 360) -> PILImage.Image | None:
-    try:
-        raw = base64.b64decode(CMA_LOGO_BASE64)
-        image = PILImage.open(BytesIO(raw)).convert("RGBA")
-        ratio = max_width / image.width
-        return image.resize(
-            (max_width, int(image.height * ratio)),
-            PILImage.Resampling.LANCZOS,
-        )
-    except Exception:
-        return None
-
-
-def _paste_logo(
-    page: PILImage.Image,
-    draw: ImageDraw.ImageDraw,
-    x: int,
-    y: int,
-    width: int = 345,
-) -> None:
-    logo = _load_logo_image(width)
-    box_h = 150
-    box_w = width + 40
-    draw.rounded_rectangle(
-        (x, y, x + box_w, y + box_h),
-        radius=20,
-        fill="white",
-        outline="#CBD5E1",
-        width=2,
-    )
-    if logo is not None:
-        px = x + (box_w - logo.width) // 2
-        py = y + (box_h - logo.height) // 2
-        page.alpha_composite(logo, (px, py))
-    else:
-        _draw_text(
-            draw,
-            (x + box_w // 2, y + box_h // 2),
-            "CMA Nouvelle-Aquitaine",
-            28,
-            V8_RED,
-            bold=True,
-            anchor="mm",
-        )
-
-
-def _draw_header(
-    page: PILImage.Image,
-    draw: ImageDraw.ImageDraw,
-    title: str,
-) -> None:
-    draw.rectangle((0, 0, V8_PAGE_SIZE[0], 18), fill=V8_RED)
-    draw.rectangle((0, 18, V8_PAGE_SIZE[0], 170), fill=V8_NAVY)
-    _draw_text(
-        draw,
-        (65, 76),
-        title.upper(),
-        34,
-        "white",
-        bold=True,
-    )
-    _paste_logo(page, draw, 835, 28, width=300)
-
-
-def _draw_footer(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-) -> None:
-    y = V8_PAGE_SIZE[1] - 50
-    draw.line((60, y - 12, V8_PAGE_SIZE[0] - 60, y - 12), fill="#CBD5E1", width=2)
-    _draw_text(draw, (60, y), text, 20, V8_MUTED)
-
-
-def _draw_kpi_card(
-    draw: ImageDraw.ImageDraw,
-    box: tuple[int, int, int, int],
-    label: str,
-    value: Any,
-    detail: str,
-) -> None:
-    _rounded_card(draw, box)
-    x1, y1, x2, y2 = box
-    draw.rounded_rectangle(
-        (x1, y1, x2, y1 + 12),
-        radius=20,
-        fill=V8_RED,
-    )
-    _draw_text(draw, (x1 + 24, y1 + 34), label, 26, V8_MUTED, bold=True)
-    _draw_text(draw, (x1 + 24, y1 + 88), value, 52, V8_TEXT, bold=True)
-    _draw_text(draw, (x1 + 24, y2 - 44), detail, 21, "#98A2B3")
-
-
-def _draw_bar_chart(
-    draw: ImageDraw.ImageDraw,
-    box: tuple[int, int, int, int],
-    title: str,
-    series: pd.Series,
-    max_items: int = 8,
-) -> None:
-    _rounded_card(draw, box)
-    x1, y1, x2, y2 = box
-    draw.rounded_rectangle((x1, y1, x2, y1 + 72), radius=20, fill=V8_NAVY)
-    draw.rectangle((x1, y1 + 45, x2, y1 + 72), fill=V8_NAVY)
-    draw.rectangle((x1, y1, x1 + 10, y1 + 72), fill=V8_RED)
-    _draw_text(draw, (x1 + 28, y1 + 18), title, 28, "white", bold=True)
-
-    clean = series.dropna().sort_values(ascending=False).head(max_items)
-    if clean.empty:
-        _draw_text(
-            draw,
-            ((x1 + x2) // 2, (y1 + y2) // 2),
-            "Aucune donnée",
-            26,
-            V8_MUTED,
-            anchor="mm",
-        )
-        return
-
-    max_value = max(float(clean.max()), 1.0)
-    chart_top = y1 + 100
-    row_h = max(52, int((y2 - chart_top - 20) / len(clean)))
-    label_w = int((x2 - x1) * 0.42)
-    bar_x = x1 + label_w
-    bar_max_w = x2 - bar_x - 70
-
-    for idx, (label, value) in enumerate(clean.items()):
-        cy = chart_top + idx * row_h
-        label_text = str(label)
-        if len(label_text) > 28:
-            label_text = label_text[:27] + "…"
-        _draw_text(draw, (x1 + 22, cy + 8), label_text, 21, "#344054")
-        draw.rounded_rectangle(
-            (bar_x, cy + 15, bar_x + bar_max_w, cy + 31),
-            radius=8,
-            fill="#EDF1F5",
-        )
-        value_w = int(bar_max_w * float(value) / max_value)
-        draw.rounded_rectangle(
-            (bar_x, cy + 15, bar_x + max(value_w, 8), cy + 31),
-            radius=8,
-            fill=V8_RED,
-        )
-        _draw_text(draw, (bar_x + bar_max_w + 12, cy + 6), int(value), 21, V8_TEXT, bold=True)
-
-
-def _draw_timeline(
-    draw: ImageDraw.ImageDraw,
-    box: tuple[int, int, int, int],
-    df: pd.DataFrame,
-) -> None:
-    _rounded_card(draw, box)
-    x1, y1, x2, y2 = box
-    draw.rounded_rectangle((x1, y1, x2, y1 + 72), radius=20, fill=V8_NAVY)
-    draw.rectangle((x1, y1 + 45, x2, y1 + 72), fill=V8_NAVY)
-    draw.rectangle((x1, y1, x1 + 10, y1 + 72), fill=V8_RED)
-    _draw_text(draw, (x1 + 28, y1 + 18), "Évolution quotidienne des appels", 28, "white", bold=True)
-
-    dates = pd.to_datetime(df["Date de l'appel"], errors="coerce").dropna()
-    if dates.empty:
-        _draw_text(
-            draw,
-            ((x1 + x2) // 2, (y1 + y2) // 2),
-            "Aucune date exploitable",
-            26,
-            V8_MUTED,
-            anchor="mm",
-        )
-        return
-
-    daily = dates.dt.date.value_counts().sort_index()
-    if len(daily) > 30:
-        daily = daily.tail(30)
-
-    max_value = max(int(daily.max()), 1)
-    chart_left = x1 + 45
-    chart_right = x2 - 30
-    chart_bottom = y2 - 70
-    chart_top = y1 + 105
-    slot = (chart_right - chart_left) / len(daily)
-
-    for idx, (day, value) in enumerate(daily.items()):
-        bx = int(chart_left + idx * slot + slot * 0.2)
-        bw = max(10, int(slot * 0.6))
-        bh = int((chart_bottom - chart_top) * float(value) / max_value)
-        draw.rounded_rectangle(
-            (bx, chart_bottom - bh, bx + bw, chart_bottom),
-            radius=6,
-            fill=V8_RED,
-        )
-        _draw_text(
-            draw,
-            (bx + bw // 2, chart_bottom - bh - 22),
-            int(value),
-            19,
-            V8_TEXT,
-            bold=True,
-            anchor="mm",
-        )
-        if idx % max(1, len(daily) // 8) == 0 or idx == len(daily) - 1:
-            _draw_text(
-                draw,
-                (bx + bw // 2, chart_bottom + 24),
-                pd.Timestamp(day).strftime("%d/%m"),
-                16,
-                V8_MUTED,
-                anchor="mm",
-            )
-
-
-def _new_page(background: str = V8_BG) -> tuple[PILImage.Image, ImageDraw.ImageDraw]:
-    page = PILImage.new("RGBA", V8_PAGE_SIZE, background)
-    return page, ImageDraw.Draw(page)
-
-
-def create_v8_report_pages(df: pd.DataFrame) -> list[PILImage.Image]:
-    # Validation immédiate du moteur typographique.
-    _font(20, False)
-    _font(20, True)
-    metrics = report_metrics(df)
-    state_counts = contact_state_counts(df)
-    progress_rate = contact_progress_rate(df)
-    remarks = generate_report_remarks(df)
-    export_date = datetime.now().strftime("%d/%m/%Y à %H:%M")
-
-    pages: list[PILImage.Image] = []
-
-    # PAGE 1 — COUVERTURE
-    page, draw = _new_page(V8_NAVY)
-    draw.rectangle((0, 0, V8_PAGE_SIZE[0], 20), fill=V8_RED)
-    _draw_text(draw, (70, 95), "CMA NOUVELLE-AQUITAINE · GIRONDE", 30, "white", bold=True)
-    _paste_logo(page, draw, 790, 50, width=350)
-
-    _draw_text(draw, (70, 420), "Rapport cellule de crise", 72, "white", bold=True)
-    _draw_text(draw, (70, 515), "Entreprises appelées", 64, "#FF3038", bold=True)
-    _draw_text(
-        draw,
-        (70, 590),
-        "Cartographie, suivi territorial et analyse des appels",
-        32,
-        "white",
-    )
-
-    _rounded_card(
-        draw,
-        (70, 1120, 1170, 1540),
-        fill=V8_BLUE,
-        outline=V8_BLUE,
-        radius=28,
-    )
-    _draw_text(draw, (105, 1165), "PÉRIMÈTRE DU RAPPORT", 30, "white", bold=True)
-    scope = report_scope_text(df)
-    _draw_text(draw, (105, 1240), scope, 26, "white")
-    _draw_text(draw, (105, 1325), f"Date de l'export : {export_date}", 26, "white")
-    _draw_text(
-        draw,
-        (105, 1400),
-        "Document généré automatiquement à partir des filtres actifs.",
-        22,
-        "#DCE6F0",
-    )
-    pages.append(page.convert("RGB"))
-
-    # PAGE 2 — TABLEAU DE BORD
-    page, draw = _new_page()
-    _draw_header(page, draw, "Tableau de bord")
-    _draw_text(draw, (65, 215), "Synthèse de la campagne d'appels", 42, V8_TEXT, bold=True)
-    _draw_text(draw, (65, 268), report_scope_text(df), 23, V8_MUTED)
-
-    card_w = 350
-    card_h = 205
-    xs = [65, 445, 825]
-    ys = [315, 550]
-    kpis = [
-        ("Entreprises appelées", metrics["total"], "Périmètre filtré"),
-        ("Contactées", state_counts["Entreprise contactée"], "Échange direct"),
-        ("Message vocal & mail", state_counts["Message vocal & mail envoyé"], "Suivi potentiel"),
-        ("Mauvais numéros", state_counts["Mauvais numéro"], "Coordonnées à corriger"),
-        ("Déjà contactées", state_counts["Déjà contactée"], "Prise en charge existante"),
-        ("Avancement", f"{progress_rate} %", "Traitements finalisés"),
-    ]
-    for idx, item in enumerate(kpis):
-        row = idx // 3
-        col = idx % 3
-        x = xs[col]
-        y = ys[row]
-        _draw_kpi_card(draw, (x, y, x + card_w, y + card_h), *item)
-
-    _rounded_card(draw, (65, 815, 1175, 1570), fill="#E4EDF7", outline="#B9CCE0")
-    draw.rectangle((65, 815, 77, 1570), fill=V8_RED)
-    _draw_text(draw, (105, 855), "Remarques principales", 38, V8_TEXT, bold=True)
-    ry = 930
-    for remark in remarks:
-        draw.ellipse((105, ry + 7, 119, ry + 21), fill=V8_RED)
-        lines = [remark[i:i+92] for i in range(0, len(remark), 92)]
-        for line in lines:
-            _draw_text(draw, (135, ry), line, 26, V8_TEXT)
-            ry += 36
-        ry += 24
-        if ry > 1510:
-            break
-
-    _draw_footer(draw, f"Rapport généré le {export_date} · Usage cellule de crise")
-    pages.append(page.convert("RGB"))
-
-    # PAGE 3 — CARTE
-    page, draw = _new_page()
-    _draw_header(page, draw, "Cartographie du périmètre")
-    _draw_text(draw, (65, 215), "Entreprises appelées", 42, V8_TEXT, bold=True)
-    _draw_text(draw, (65, 268), report_scope_text(df), 23, V8_MUTED)
-
-    _rounded_card(draw, (55, 305, 1185, 1550))
-    map_bytes, excluded = create_osm_report_map(df)
-    if map_bytes:
-        map_img = PILImage.open(BytesIO(map_bytes)).convert("RGB")
-        map_img = ImageOps.fit(map_img, (1060, 1120), method=PILImage.Resampling.LANCZOS)
-        page.paste(map_img, (90, 350))
-    else:
-        _draw_text(draw, (620, 900), "Carte temporairement indisponible", 28, V8_MUTED, anchor="mm")
-
-    legend_y = 1490
-    legend_items = [
-        ("Entreprise contactée", "#16A34A"),
-        ("Message vocal & mail", "#06B6D4"),
-        ("Mauvais numéro", "#B91C1C"),
-        ("Déjà contactée", "#EA580C"),
-        ("Non renseigné", "#667085"),
-    ]
-    lx = 95
-    for label, color in legend_items:
-        draw.ellipse((lx, legend_y, lx + 16, legend_y + 16), fill=color)
-        _draw_text(draw, (lx + 24, legend_y - 4), label, 18, V8_MUTED)
-        lx += 210
-
-    if excluded:
-        _draw_text(
-            draw,
-            (65, 1600),
-            f"{excluded} point(s) aberrant(s) ou hors emprise exclus du cadrage.",
-            15,
-            V8_MUTED,
-        )
-    _draw_footer(draw, "Fond cartographique © contributeurs OpenStreetMap")
-    pages.append(page.convert("RGB"))
-
-    # PAGE 4 — ANALYSE TERRITORIALE
-    page, draw = _new_page()
-    _draw_header(page, draw, "Analyse territoriale")
-    epci_series = df.groupby("EPCI / CDC").size() if not df.empty else pd.Series(dtype=int)
-    commune_series = df.groupby("Commune").size() if not df.empty else pd.Series(dtype=int)
-
-    _draw_bar_chart(draw, (55, 220, 1185, 835), "Répartition par CDC / EPCI", epci_series, 10)
-    _draw_bar_chart(draw, (55, 875, 1185, 1530), "Principales communes", commune_series, 10)
-    _draw_footer(draw, "Analyse calculée à partir du périmètre filtré.")
-    pages.append(page.convert("RGB"))
-
-    # PAGE 5 — ANALYSE DES APPELS
-    page, draw = _new_page()
-    _draw_header(page, draw, "Analyse des appels")
-    contact_series = df.groupby("État du contact").size() if not df.empty else pd.Series(dtype=int)
-    theme_series = df.groupby("Thématique").size() if not df.empty else pd.Series(dtype=int)
-
-    _draw_bar_chart(draw, (55, 220, 590, 910), "État des contacts", contact_series, 8)
-    _draw_bar_chart(draw, (625, 220, 1185, 910), "Thématiques", theme_series, 8)
-    _draw_timeline(draw, (55, 950, 1185, 1550), df)
-    _draw_footer(draw, "Précaution RGPD : seules les données nécessaires à la restitution sont reprises.")
-    pages.append(page.convert("RGB"))
-
-    return pages
-
-
-def create_v8_pdf_report(df: pd.DataFrame) -> bytes:
-    pages = create_v8_report_pages(df)
-    output = BytesIO()
-    pdf = canvas.Canvas(output, pagesize=A4)
-
-    for page in pages:
-        image_buffer = BytesIO()
-        page.save(image_buffer, format="PNG", optimize=True)
-        image_buffer.seek(0)
-
-        pdf.drawInlineImage(
-            PILImage.open(image_buffer),
-            0,
-            0,
-            width=A4[0],
-            height=A4[1],
-        )
-        pdf.showPage()
-
-    pdf.save()
-    output.seek(0)
-    return output.getvalue()
-
+    return remarks[:7]
 
 
 def create_pdf_report(df: pd.DataFrame) -> bytes:
@@ -3894,24 +3061,24 @@ def page_report() -> None:
         )
     with export_cols[1]:
         if st.button(
-            "Préparer le rapport V9",
+            "Préparer le rapport V10",
             type="primary",
             use_container_width=True,
             key="prepare_pdf_report",
         ):
-            with st.spinner("Génération du rapport V9…"):
+            with st.spinner("Génération du rapport V10…"):
                 try:
                     st.session_state.generated_pdf_report = create_v8_pdf_report(filtered)
-                    st.success("Le rapport V9 est prêt.")
+                    st.success("Le rapport V10 est prêt.")
                 except Exception as exc:
                     st.session_state.generated_pdf_report = None
                     st.error(f"Impossible de générer le rapport : {exc}")
 
         if st.session_state.get("generated_pdf_report"):
             st.download_button(
-                "Télécharger le rapport PDF V9",
+                "Télécharger le rapport PDF V10",
                 data=st.session_state.generated_pdf_report,
-                file_name="rapport_cellule_crise_v9.pdf",
+                file_name="rapport_cellule_crise_v10.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key="download_generated_pdf",
