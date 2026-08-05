@@ -1,7 +1,8 @@
-streamlit==1.61.0
+streamlit==1.60.0
 pandas==3.0.5
 plotly==6.9.0
 pydeck==0.9.3
 requests==2.34.2
 openpyxl==3.1.5
 reportlab==5.0.0
+
