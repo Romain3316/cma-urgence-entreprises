@@ -524,6 +524,8 @@ def initialize_state() -> None:
         st.session_state.crisis_data = pd.DataFrame()
     if "lege_data" not in st.session_state:
         st.session_state.lege_data = pd.DataFrame()
+    if "generated_pdf_report" not in st.session_state:
+        st.session_state.generated_pdf_report = None
     if "current_page" not in st.session_state:
         st.session_state.current_page = "Tableau de bord"
     if "nav_radio" not in st.session_state:
@@ -1870,199 +1872,217 @@ def create_pdf_report(df: pd.DataFrame) -> bytes:
 
     # ------------------------------------------------------------------
     # PAGE DE GARDE — STYLE CMA RÉFLEXE
+    # Construite uniquement avec des Flowables Platypus afin d'éviter
+    # les erreurs de mise en page liées à un Drawing plus grand que le frame.
     # ------------------------------------------------------------------
-    page_width, page_height = landscape(A4)
+    available_width = 27.2 * cm
 
-    cover = Drawing(page_width, page_height)
-
-    # Fond bleu nuit
-    cover.add(
-        Rect(
-            0,
-            0,
-            page_width,
-            page_height,
-            fillColor=colors.HexColor("#173A63"),
-            strokeColor=None,
-        )
-    )
-
-    # Bandeau rouge supérieur
-    cover.add(
-        Rect(
-            0,
-            page_height - 0.75 * cm,
-            page_width,
-            0.75 * cm,
-            fillColor=colors.HexColor("#E31B23"),
-            strokeColor=None,
-        )
-    )
-
-    # Libellé institutionnel
-    cover.add(
-        String(
-            2.0 * cm,
-            page_height - 3.1 * cm,
-            "CMA NOUVELLE-AQUITAINE · GIRONDE",
-            fontName="Helvetica-Bold",
-            fontSize=12.5,
-            fillColor=colors.white,
-        )
-    )
-
-    # Cartouche logo blanc arrondi simulé
-    logo_box_x = page_width - 10.7 * cm
-    logo_box_y = page_height - 5.1 * cm
-    logo_box_w = 8.6 * cm
-    logo_box_h = 3.55 * cm
-
-    cover.add(
-        Rect(
-            logo_box_x,
-            logo_box_y,
-            logo_box_w,
-            logo_box_h,
-            rx=9,
-            ry=9,
-            fillColor=colors.white,
-            strokeColor=colors.HexColor("#D0D5DD"),
-            strokeWidth=0.8,
-        )
-    )
-
-    # Le logo est ajouté en Flowable par-dessus le dessin via un tableau
-    # de mise en page, juste après le fond de couverture.
-
-    # Titre principal
-    cover.add(
-        String(
-            2.0 * cm,
-            page_height - 7.8 * cm,
-            "Rapport cellule de crise",
-            fontName="Helvetica-Bold",
-            fontSize=27,
-            fillColor=colors.white,
-        )
-    )
-
-    cover.add(
-        String(
-            2.0 * cm,
-            page_height - 9.2 * cm,
-            "Entreprises appelées",
-            fontName="Helvetica-Bold",
-            fontSize=24,
-            fillColor=colors.HexColor("#FF3038"),
-        )
-    )
-
-    cover.add(
-        String(
-            2.0 * cm,
-            page_height - 10.8 * cm,
-            "Cartographie, suivi territorial et analyse des appels",
-            fontName="Helvetica",
-            fontSize=13,
-            fillColor=colors.white,
-        )
-    )
-
-    # Cartouche bas de page
-    cover.add(
-        Rect(
-            2.0 * cm,
-            2.1 * cm,
-            page_width - 4.0 * cm,
-            4.3 * cm,
-            rx=11,
-            ry=11,
-            fillColor=colors.HexColor("#2C527E"),
-            strokeColor=None,
-        )
-    )
-
-    cover.add(
-        String(
-            2.8 * cm,
-            5.35 * cm,
-            "PÉRIMÈTRE DU RAPPORT",
-            fontName="Helvetica-Bold",
-            fontSize=11,
-            fillColor=colors.white,
-        )
-    )
-
-    cover.add(
-        String(
-            2.8 * cm,
-            4.35 * cm,
-            report_scope_text(df)[:120],
-            fontName="Helvetica",
-            fontSize=9.5,
-            fillColor=colors.white,
-        )
-    )
-
-    cover.add(
-        String(
-            2.8 * cm,
-            3.25 * cm,
-            f"Date de l’export : {datetime.now().strftime('%d/%m/%Y à %H:%M')}",
-            fontName="Helvetica",
-            fontSize=9.5,
-            fillColor=colors.white,
-        )
-    )
-
-    story.append(cover)
-
-    # Positionnement du logo embarqué dans la zone blanche.
     try:
         logo_bytes = base64.b64decode(CMA_LOGO_BASE64)
         logo_image = Image(BytesIO(logo_bytes))
-        logo_image.drawWidth = 7.5 * cm
-        logo_image.drawHeight = 2.65 * cm
-
-        logo_overlay = Table(
-            [[logo_image]],
-            colWidths=[page_width],
-            rowHeights=[0.01 * cm],
-            style=TableStyle(
-                [
-                    ("LEFTPADDING", (0, 0), (-1, -1), page_width - 10.15 * cm),
-                    ("TOPPADDING", (0, 0), (-1, -1), -page_height + 4.55 * cm),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ]
-            ),
-        )
-        story.append(logo_overlay)
+        logo_image.drawWidth = 7.0 * cm
+        logo_image.drawHeight = 2.45 * cm
     except Exception:
-        pass
-
-    story.append(PageBreak())
-
-
-    story.append(
-        Table(
-            [["SYNTHÈSE DE LA CAMPAGNE D'APPELS"]],
-            colWidths=[25.2 * cm],
-            rowHeights=[0.95 * cm],
-            style=TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#173A63")),
-                    ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
-                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 13),
-                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 12),
-                    ("BOX", (0, 0), (-1, -1), 0, colors.HexColor("#173A63")),
-                ]
+        logo_image = Paragraph(
+            "<b>CMA Nouvelle-Aquitaine</b>",
+            ParagraphStyle(
+                name="LogoFallback",
+                parent=styles["BodyText"],
+                fontName="Helvetica-Bold",
+                fontSize=14,
+                textColor=colors.HexColor(CMA_RED),
+                alignment=TA_CENTER,
             ),
         )
+
+    top_strip = Table(
+        [[""]],
+        colWidths=[available_width],
+        rowHeights=[0.55 * cm],
+        style=TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#E31B23")),
+                ("BOX", (0, 0), (-1, -1), 0, colors.HexColor("#E31B23")),
+            ]
+        ),
     )
-    story.append(Spacer(1, 0.3 * cm))
+
+    institution = Paragraph(
+        "<b>CMA NOUVELLE-AQUITAINE · GIRONDE</b>",
+        ParagraphStyle(
+            name="CoverInstitution",
+            parent=styles["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=12,
+            leading=14,
+            textColor=colors.white,
+        ),
+    )
+
+    logo_box = Table(
+        [[logo_image]],
+        colWidths=[8.1 * cm],
+        rowHeights=[3.1 * cm],
+        style=TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+                ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#D0D5DD")),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        ),
+    )
+
+    header_row = Table(
+        [[institution, logo_box]],
+        colWidths=[17.8 * cm, 8.2 * cm],
+        rowHeights=[3.4 * cm],
+        style=TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (0, 0), 0),
+                ("RIGHTPADDING", (0, 0), (0, 0), 8),
+                ("LEFTPADDING", (1, 0), (1, 0), 0),
+                ("RIGHTPADDING", (1, 0), (1, 0), 0),
+            ]
+        ),
+    )
+
+    title_block = [
+        Paragraph(
+            "Rapport cellule de crise",
+            ParagraphStyle(
+                name="CoverMainTitle",
+                parent=styles["Title"],
+                fontName="Helvetica-Bold",
+                fontSize=26,
+                leading=30,
+                textColor=colors.white,
+                spaceAfter=4,
+            ),
+        ),
+        Paragraph(
+            "Entreprises appelées",
+            ParagraphStyle(
+                name="CoverRedTitle",
+                parent=styles["Title"],
+                fontName="Helvetica-Bold",
+                fontSize=23,
+                leading=27,
+                textColor=colors.HexColor("#FF3038"),
+                spaceAfter=8,
+            ),
+        ),
+        Paragraph(
+            "Cartographie, suivi territorial et analyse des appels",
+            ParagraphStyle(
+                name="CoverTagline",
+                parent=styles["BodyText"],
+                fontName="Helvetica",
+                fontSize=12.5,
+                leading=16,
+                textColor=colors.white,
+            ),
+        ),
+    ]
+
+    scope_box = Table(
+        [
+            [
+                Paragraph(
+                    "<b>PÉRIMÈTRE DU RAPPORT</b>",
+                    ParagraphStyle(
+                        name="ScopeTitle",
+                        parent=styles["BodyText"],
+                        fontName="Helvetica-Bold",
+                        fontSize=10.5,
+                        textColor=colors.white,
+                    ),
+                )
+            ],
+            [
+                Paragraph(
+                    report_scope_text(df),
+                    ParagraphStyle(
+                        name="ScopeText",
+                        parent=styles["BodyText"],
+                        fontName="Helvetica",
+                        fontSize=9.5,
+                        leading=13,
+                        textColor=colors.white,
+                    ),
+                )
+            ],
+            [
+                Paragraph(
+                    f"Date de l’export : {datetime.now().strftime('%d/%m/%Y à %H:%M')}",
+                    ParagraphStyle(
+                        name="ExportDateCover",
+                        parent=styles["BodyText"],
+                        fontName="Helvetica",
+                        fontSize=9.5,
+                        textColor=colors.white,
+                    ),
+                )
+            ],
+        ],
+        colWidths=[24.7 * cm],
+        rowHeights=[0.65 * cm, 1.2 * cm, 0.65 * cm],
+        style=TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#2C527E")),
+                ("BOX", (0, 0), (-1, -1), 0, colors.HexColor("#2C527E")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 14),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        ),
+    )
+
+    cover_body = Table(
+        [
+            [header_row],
+            [Spacer(1, 0.35 * cm)],
+            [title_block],
+            [Spacer(1, 0.55 * cm)],
+            [scope_box],
+        ],
+        colWidths=[available_width],
+        rowHeights=[
+            3.4 * cm,
+            0.35 * cm,
+            5.0 * cm,
+            0.55 * cm,
+            3.2 * cm,
+        ],
+        style=TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#173A63")),
+                ("BOX", (0, 0), (-1, -1), 0, colors.HexColor("#173A63")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 1.6 * cm),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 1.6 * cm),
+                ("TOPPADDING", (0, 0), (-1, -1), 0.25 * cm),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0.25 * cm),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        ),
+    )
+
+    story.extend(
+        [
+            top_strip,
+            cover_body,
+            PageBreak(),
+        ]
+    )
+
 
     metric_data = [
         [
@@ -2826,14 +2846,24 @@ def page_report() -> None:
             use_container_width=True,
         )
     with export_cols[1]:
-        st.download_button(
-            "Générer et télécharger le rapport PDF",
-            data=create_pdf_report(filtered),
-            file_name="rapport_cellule_crise.pdf",
-            mime="application/pdf",
-            use_container_width=True,
+        if st.button(
+            "Préparer le rapport PDF",
             type="primary",
-        )
+            use_container_width=True,
+            key="prepare_pdf_report",
+        ):
+            with st.spinner("Génération du rapport PDF…"):
+                st.session_state.generated_pdf_report = create_pdf_report(filtered)
+
+        if st.session_state.get("generated_pdf_report"):
+            st.download_button(
+                "Télécharger le rapport PDF",
+                data=st.session_state.generated_pdf_report,
+                file_name="rapport_cellule_crise.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key="download_generated_pdf",
+            )
 
     render_footer()
 
