@@ -9,6 +9,11 @@ import html
 import re
 import unicodedata
 
+try:
+    from xhtml2pdf import pisa
+except Exception:
+    pisa = None
+
 import pandas as pd
 import plotly.express as px
 import pydeck as pdk
@@ -526,6 +531,8 @@ def initialize_state() -> None:
         st.session_state.lege_data = pd.DataFrame()
     if "generated_pdf_report" not in st.session_state:
         st.session_state.generated_pdf_report = None
+    if "generated_html_report" not in st.session_state:
+        st.session_state.generated_html_report = None
     if "current_page" not in st.session_state:
         st.session_state.current_page = "Tableau de bord"
     if "nav_radio" not in st.session_state:
@@ -1896,6 +1903,350 @@ def generate_report_remarks(df: pd.DataFrame) -> list[str]:
 
 
 
+def _html_escape(value: Any) -> str:
+    return html.escape("" if value is None else str(value))
+
+
+def _html_horizontal_bars(
+    series: pd.Series,
+    title: str,
+    max_items: int = 8,
+    bar_color: str = "#E31B23",
+) -> str:
+    clean = series.dropna().sort_values(ascending=False).head(max_items)
+
+    if clean.empty:
+        return (
+            '<section class="chart-card">'
+            f'<h3>{_html_escape(title)}</h3>'
+            '<div class="empty-state">Aucune donnée</div>'
+            '</section>'
+        )
+
+    max_value = max(float(clean.max()), 1.0)
+    rows = []
+
+    for label, value in clean.items():
+        percentage = max(3.0, float(value) / max_value * 100.0)
+        rows.append(
+            '<div class="bar-row">'
+            f'<div class="bar-label">{_html_escape(label)}</div>'
+            '<div class="bar-track">'
+            f'<div class="bar-fill" style="width:{percentage:.2f}%;background:{bar_color};"></div>'
+            '</div>'
+            f'<div class="bar-value">{int(value)}</div>'
+            '</div>'
+        )
+
+    return (
+        '<section class="chart-card">'
+        f'<h3>{_html_escape(title)}</h3>'
+        '<div class="bar-chart">'
+        + "".join(rows)
+        + "</div></section>"
+    )
+
+
+def _html_daily_calls(df: pd.DataFrame) -> str:
+    dates = pd.to_datetime(df["Date de l'appel"], errors="coerce").dropna()
+
+    if dates.empty:
+        return (
+            '<section class="chart-card timeline-card">'
+            '<h3>Évolution quotidienne des appels</h3>'
+            '<div class="empty-state">Aucune date exploitable</div>'
+            '</section>'
+        )
+
+    daily = dates.dt.date.value_counts().sort_index()
+    if len(daily) > 30:
+        daily = daily.tail(30)
+
+    max_value = max(int(daily.max()), 1)
+    columns = []
+
+    for day, value in daily.items():
+        height = max(8.0, float(value) / max_value * 100.0)
+        columns.append(
+            '<div class="timeline-column">'
+            f'<div class="timeline-value">{int(value)}</div>'
+            '<div class="timeline-bar-wrap">'
+            f'<div class="timeline-bar" style="height:{height:.2f}%;"></div>'
+            '</div>'
+            f'<div class="timeline-date">{pd.Timestamp(day).strftime("%d/%m")}</div>'
+            '</div>'
+        )
+
+    return (
+        '<section class="chart-card timeline-card">'
+        '<h3>Évolution quotidienne des appels</h3>'
+        '<div class="timeline-chart">'
+        + "".join(columns)
+        + "</div></section>"
+    )
+
+
+def _map_data_uri(df: pd.DataFrame) -> tuple[str | None, int]:
+    map_bytes, excluded_points = create_osm_report_map(df)
+    if map_bytes is None:
+        return None, excluded_points
+
+    encoded = base64.b64encode(map_bytes).decode("ascii")
+    return f"data:image/png;base64,{encoded}", excluded_points
+
+
+def create_premium_html_report(df: pd.DataFrame) -> bytes:
+    metrics = report_metrics(df)
+    state_counts = contact_state_counts(df)
+    progress_rate = contact_progress_rate(df)
+    remarks = generate_report_remarks(df)
+
+    epci_series = (
+        df.groupby("EPCI / CDC").size()
+        if not df.empty
+        else pd.Series(dtype=int)
+    )
+    commune_series = (
+        df.groupby("Commune").size()
+        if not df.empty
+        else pd.Series(dtype=int)
+    )
+    contact_series = (
+        df.groupby("État du contact").size()
+        if not df.empty
+        else pd.Series(dtype=int)
+    )
+    theme_series = (
+        df.groupby("Thématique").size()
+        if not df.empty
+        else pd.Series(dtype=int)
+    )
+
+    map_uri, excluded_points = _map_data_uri(df)
+    export_date = datetime.now().strftime("%d/%m/%Y à %H:%M")
+
+    kpis = [
+        ("Entreprises appelées", metrics["total"], "Périmètre filtré"),
+        ("Contactées", state_counts["Entreprise contactée"], "Échange direct"),
+        (
+            "Message vocal & mail",
+            state_counts["Message vocal & mail envoyé"],
+            "Suivi potentiel",
+        ),
+        (
+            "Mauvais numéros",
+            state_counts["Mauvais numéro"],
+            "Coordonnées à corriger",
+        ),
+        (
+            "Déjà contactées",
+            state_counts["Déjà contactée"],
+            "Prise en charge existante",
+        ),
+        ("Avancement", f"{progress_rate} %", "Traitements finalisés"),
+    ]
+
+    kpi_html = "".join(
+        '<article class="kpi-card">'
+        f'<div class="kpi-label">{_html_escape(label)}</div>'
+        f'<div class="kpi-value">{_html_escape(value)}</div>'
+        f'<div class="kpi-detail">{_html_escape(detail)}</div>'
+        "</article>"
+        for label, value, detail in kpis
+    )
+
+    remarks_html = "".join(
+        f"<li>{_html_escape(remark)}</li>"
+        for remark in remarks
+    )
+
+    map_html = (
+        f'<img class="report-map" src="{map_uri}" alt="Cartographie du périmètre">'
+        if map_uri
+        else '<div class="map-placeholder">Carte temporairement indisponible</div>'
+    )
+
+    excluded_note = (
+        f'<p class="small-note">{excluded_points} point(s) aberrant(s) ou hors emprise '
+        "ont été exclus du cadrage.</p>"
+        if excluded_points
+        else ""
+    )
+
+    html_report = f'''<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Rapport cellule de crise CMA</title>
+<style>
+@page {{ size: A4 portrait; margin: 0; }}
+* {{ box-sizing: border-box; }}
+body {{ margin:0; font-family:Arial,Helvetica,sans-serif; color:#173A63; background:#E9EEF4; }}
+.page {{ position:relative; width:210mm; min-height:297mm; padding:12mm 14mm 14mm; background:#F2F5F8; page-break-after:always; overflow:hidden; }}
+.page:last-child {{ page-break-after:auto; }}
+.page-header {{ display:table; width:100%; border-top:5px solid #E31B23; background:#173A63; color:#fff; padding:8mm 10mm; }}
+.page-header-left,.page-header-right {{ display:table-cell; vertical-align:middle; }}
+.page-header-left {{ width:62%; }}
+.page-header-right {{ width:38%; text-align:right; }}
+.header-title {{ font-size:12px; font-weight:700; letter-spacing:.04em; }}
+.logo-box {{ display:inline-block; background:#fff; padding:5px 9px; border-radius:8px; border:1px solid #D0D5DD; }}
+.logo-box img {{ width:58mm; height:auto; }}
+.cover {{ padding:0; background:#173A63; color:#fff; }}
+.cover .cover-inner {{ min-height:297mm; padding:0 15mm 16mm; border-top:7px solid #E31B23; }}
+.cover-top {{ display:table; width:100%; padding-top:16mm; }}
+.cover-brand,.cover-logo {{ display:table-cell; vertical-align:middle; }}
+.cover-brand {{ width:58%; font-size:13px; font-weight:700; }}
+.cover-logo {{ width:42%; text-align:right; }}
+.cover-logo .logo-box img {{ width:63mm; }}
+.cover-title {{ margin-top:36mm; font-size:37px; line-height:1.05; font-weight:700; }}
+.cover-title .red {{ display:block; margin-top:5px; color:#FF3038; }}
+.cover-subtitle {{ margin-top:14px; font-size:16px; line-height:1.45; }}
+.cover-panel {{ margin-top:32mm; padding:12mm; background:#2C527E; border-radius:14px; }}
+.cover-panel-title {{ margin-bottom:8px; font-size:12px; font-weight:700; letter-spacing:.06em; }}
+.cover-panel-text {{ font-size:11px; line-height:1.55; }}
+.section-heading {{ margin:0 0 8mm; padding:4mm 6mm; background:#173A63; color:#fff; border-left:6px solid #E31B23; font-size:18px; }}
+.section-intro {{ margin:-3mm 0 7mm; color:#667085; font-size:10px; }}
+.kpi-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:5mm; }}
+.kpi-card {{ padding:7mm 5mm; background:#fff; border:1px solid #DCE3EA; border-top:5px solid #E31B23; border-radius:10px; }}
+.kpi-label {{ min-height:11mm; color:#667085; font-size:10px; font-weight:700; }}
+.kpi-value {{ margin:5px 0; color:#173A63; font-size:27px; font-weight:700; }}
+.kpi-detail {{ color:#98A2B3; font-size:8px; }}
+.analysis-box {{ margin-top:8mm; padding:7mm 8mm; background:#E6EEF7; border:1px solid #B9CCE0; border-left:6px solid #E31B23; border-radius:10px; }}
+.analysis-box h3 {{ margin:0 0 4mm; font-size:14px; }}
+.analysis-box ul {{ margin:0; padding-left:6mm; }}
+.analysis-box li {{ margin-bottom:3mm; font-size:10px; line-height:1.35; }}
+.map-shell {{ padding:6mm; background:#fff; border:1px solid #DCE3EA; border-radius:12px; }}
+.report-map {{ display:block; width:100%; height:auto; border-radius:8px; }}
+.map-placeholder {{ height:155mm; padding-top:70mm; text-align:center; color:#667085; background:#E9EEF4; }}
+.legend {{ margin-top:5mm; text-align:center; }}
+.legend span {{ display:inline-block; margin:0 3mm 2mm; font-size:8px; }}
+.legend-dot {{ display:inline-block; width:8px; height:8px; margin-right:3px; border-radius:50%; }}
+.chart-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:5mm; }}
+.chart-card {{ padding:5mm; background:#fff; border:1px solid #DCE3EA; border-radius:10px; }}
+.chart-card h3 {{ margin:-5mm -5mm 5mm; padding:4mm 5mm; background:#173A63; color:#fff; border-top:4px solid #E31B23; font-size:12px; }}
+.bar-row {{ display:grid; grid-template-columns:38% 52% 10%; align-items:center; margin-bottom:3.5mm; }}
+.bar-label {{ padding-right:3mm; color:#344054; font-size:8px; }}
+.bar-track {{ height:6px; background:#EDF1F5; }}
+.bar-fill {{ height:6px; }}
+.bar-value {{ padding-left:2mm; font-size:8px; font-weight:700; }}
+.timeline-card {{ margin-top:7mm; }}
+.timeline-chart {{ display:flex; align-items:flex-end; height:65mm; }}
+.timeline-column {{ flex:1; text-align:center; }}
+.timeline-value {{ height:7mm; font-size:7px; font-weight:700; }}
+.timeline-bar-wrap {{ position:relative; height:48mm; margin:0 2px; background:#F2F4F7; }}
+.timeline-bar {{ position:absolute; bottom:0; left:22%; width:56%; background:#E31B23; }}
+.timeline-date {{ margin-top:2mm; font-size:6px; color:#667085; }}
+.small-note {{ margin-top:3mm; color:#667085; font-size:7px; }}
+.page-footer {{ position:absolute; left:14mm; right:14mm; bottom:7mm; padding-top:3mm; border-top:1px solid #CBD5E1; color:#667085; font-size:7px; }}
+</style>
+</head>
+<body>
+
+<section class="page cover">
+<div class="cover-inner">
+<div class="cover-top">
+<div class="cover-brand">CMA NOUVELLE-AQUITAINE · GIRONDE</div>
+<div class="cover-logo"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
+</div>
+<div class="cover-title">Rapport cellule de crise<span class="red">Entreprises appelées</span></div>
+<div class="cover-subtitle">Cartographie, suivi territorial et analyse des appels</div>
+<div class="cover-panel">
+<div class="cover-panel-title">PÉRIMÈTRE DU RAPPORT</div>
+<div class="cover-panel-text">{_html_escape(report_scope_text(df))}<br>Date de l'export : {_html_escape(export_date)}</div>
+</div>
+</div>
+</section>
+
+<section class="page">
+<div class="page-header">
+<div class="page-header-left"><div class="header-title">CMA NOUVELLE-AQUITAINE · GIRONDE</div></div>
+<div class="page-header-right"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
+</div>
+<h1 class="section-heading">Tableau de bord</h1>
+<p class="section-intro">Synthèse du périmètre sélectionné au moment de l'export.</p>
+<div class="kpi-grid">{kpi_html}</div>
+<div class="analysis-box"><h3>Remarques principales</h3><ul>{remarks_html}</ul></div>
+<div class="page-footer">Rapport généré le {_html_escape(export_date)} · Données filtrées · Usage cellule de crise</div>
+</section>
+
+<section class="page">
+<div class="page-header">
+<div class="page-header-left"><div class="header-title">CARTOGRAPHIE DU PÉRIMÈTRE</div></div>
+<div class="page-header-right"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
+</div>
+<h1 class="section-heading">Cartographie des entreprises appelées</h1>
+<p class="section-intro">{_html_escape(report_scope_text(df))}</p>
+<div class="map-shell">{map_html}</div>
+<div class="legend">
+<span><i class="legend-dot" style="background:#16A34A;"></i>Entreprise contactée</span>
+<span><i class="legend-dot" style="background:#06B6D4;"></i>Message vocal & mail</span>
+<span><i class="legend-dot" style="background:#B91C1C;"></i>Mauvais numéro</span>
+<span><i class="legend-dot" style="background:#EA580C;"></i>Déjà contactée</span>
+<span><i class="legend-dot" style="background:#667085;"></i>Non renseigné</span>
+</div>
+{excluded_note}
+<div class="page-footer">Fond cartographique © contributeurs OpenStreetMap</div>
+</section>
+
+<section class="page">
+<div class="page-header">
+<div class="page-header-left"><div class="header-title">ANALYSE TERRITORIALE</div></div>
+<div class="page-header-right"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
+</div>
+<h1 class="section-heading">Répartition géographique</h1>
+<div class="chart-grid">
+{_html_horizontal_bars(epci_series, "Répartition par CDC / EPCI", 10)}
+{_html_horizontal_bars(commune_series, "Principales communes", 10)}
+</div>
+<div class="page-footer">Analyse calculée à partir des entreprises correspondant aux filtres actifs.</div>
+</section>
+
+<section class="page">
+<div class="page-header">
+<div class="page-header-left"><div class="header-title">ANALYSE DES APPELS</div></div>
+<div class="page-header-right"><div class="logo-box"><img src="data:image/png;base64,{CMA_LOGO_BASE64}" alt="Logo CMA"></div></div>
+</div>
+<h1 class="section-heading">Suivi de la campagne</h1>
+<div class="chart-grid">
+{_html_horizontal_bars(contact_series, "État des contacts", 8)}
+{_html_horizontal_bars(theme_series, "Thématiques des commentaires", 8)}
+</div>
+{_html_daily_calls(df)}
+<div class="page-footer">Précaution RGPD : seules les données nécessaires à la restitution sont reprises.</div>
+</section>
+
+</body>
+</html>'''
+
+    return html_report.encode("utf-8")
+
+
+def create_premium_pdf_report(df: pd.DataFrame) -> bytes:
+    if pisa is None:
+        raise RuntimeError(
+            "Le moteur PDF xhtml2pdf n'est pas installé. "
+            "Vérifiez le fichier requirements.txt."
+        )
+
+    html_bytes = create_premium_html_report(df)
+    output = BytesIO()
+
+    result = pisa.CreatePDF(
+        src=html_bytes.decode("utf-8"),
+        dest=output,
+        encoding="utf-8",
+    )
+
+    if result.err:
+        raise RuntimeError(
+            "La conversion du rapport HTML en PDF a échoué."
+        )
+
+    output.seek(0)
+    return output.getvalue()
+
+
+
 def create_pdf_report(df: pd.DataFrame) -> bytes:
     """Génère un rapport CMA en format A4 portrait, dense et institutionnel."""
     buffer = BytesIO()
@@ -3041,22 +3392,48 @@ def page_report() -> None:
         )
     with export_cols[1]:
         if st.button(
-            "Préparer le rapport PDF",
+            "Préparer le rapport premium",
             type="primary",
             use_container_width=True,
             key="prepare_pdf_report",
         ):
-            with st.spinner("Génération du rapport PDF…"):
-                st.session_state.generated_pdf_report = create_pdf_report(filtered)
+            with st.spinner("Génération du rapport premium…"):
+                try:
+                    st.session_state.generated_pdf_report = (
+                        create_premium_pdf_report(filtered)
+                    )
+                    st.session_state.generated_html_report = (
+                        create_premium_html_report(filtered)
+                    )
+                    st.success("Le rapport premium est prêt.")
+                except Exception as exc:
+                    st.session_state.generated_pdf_report = None
+                    st.session_state.generated_html_report = (
+                        create_premium_html_report(filtered)
+                    )
+                    st.error(
+                        "Le PDF n'a pas pu être généré, mais la version HTML "
+                        f"premium est disponible. Détail : {exc}"
+                    )
 
         if st.session_state.get("generated_pdf_report"):
             st.download_button(
-                "Télécharger le rapport PDF",
+                "Télécharger le rapport PDF premium",
                 data=st.session_state.generated_pdf_report,
-                file_name="rapport_cellule_crise.pdf",
+                file_name="rapport_cellule_crise_premium.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key="download_generated_pdf",
+            )
+
+        if st.session_state.get("generated_html_report"):
+            st.download_button(
+                "Télécharger la version HTML premium",
+                data=st.session_state.generated_html_report,
+                file_name="rapport_cellule_crise_premium.html",
+                mime="text/html",
+                use_container_width=True,
+                key="download_generated_html",
             )
 
     render_footer()
